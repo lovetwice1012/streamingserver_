@@ -35,22 +35,41 @@ router.get('/info', authenticate, async (req, res) => {
     }
 
     const forwardedHost = req.headers['x-forwarded-host'];
+    const forwardedProto = req.headers['x-forwarded-proto'];
+    const forwardedPortHeader = req.headers['x-forwarded-port'];
+
     const hostHeader = forwardedHost
       ? forwardedHost.split(',')[0].trim()
       : (req.headers.host || '');
     const hostFromRequest = hostHeader.split(':')[0] || 'localhost';
+    const protocolFromRequest = (
+      forwardedProto
+        ? forwardedProto.split(',')[0].trim()
+        : (req.protocol || '')
+    ).toLowerCase() || 'http';
+    const portFromRequest = forwardedPortHeader
+      ? forwardedPortHeader.split(',')[0].trim()
+      : undefined;
 
     const ingestBaseOverride = removeTrailingSlash(process.env.STREAM_INGEST_BASE_URL);
     const playbackBaseOverride = removeTrailingSlash(process.env.STREAM_PLAYBACK_BASE_URL);
 
     const ingestProtocol = (process.env.STREAM_INGEST_PROTOCOL || 'rtmp').toLowerCase();
-    const playbackProtocol = (process.env.STREAM_PLAYBACK_PROTOCOL || 'http').toLowerCase();
+    const playbackProtocol = (
+      process.env.STREAM_PLAYBACK_PROTOCOL || protocolFromRequest || 'http'
+    ).toLowerCase();
 
     const ingestHost = process.env.STREAM_INGEST_HOST || process.env.DOMAIN || hostFromRequest;
     const playbackHost = process.env.STREAM_PLAYBACK_HOST || process.env.DOMAIN || hostFromRequest;
 
     const ingestPort = process.env.STREAM_INGEST_PORT || process.env.RTMP_PORT || 1935;
-    const playbackPort = process.env.STREAM_PLAYBACK_PORT || process.env.HTTP_FLV_PORT || 8000;
+    const playbackPort = (
+      process.env.STREAM_PLAYBACK_PORT
+      || portFromRequest
+      || (playbackProtocol === 'https'
+        ? 443
+        : (process.env.HTTP_FLV_PORT || 8000))
+    );
 
     const ingestPortPart = shouldOmitPort(ingestProtocol, ingestPort) ? '' : `:${ingestPort}`;
     const playbackPortPart = shouldOmitPort(playbackProtocol, playbackPort) ? '' : `:${playbackPort}`;
