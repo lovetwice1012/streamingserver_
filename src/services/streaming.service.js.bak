@@ -1,0 +1,313 @@
+const NodeMediaServer = require('node-media-server');
+const path = require('path');
+const fs = require('fs');
+const authService = require('./auth.service');
+const quotaService = require('./quota.service');
+const recordingService = require('./recording.service');
+const discordService = require('./discord.service');
+const prisma = require('../db');
+
+class StreamingService {
+  constructor() {
+    this.activeSessions = new Map(); // streamKey -> { user, startTime, bytesStreamed }
+    this.nms = null;
+  }
+
+  init() {
+    // メディアディレクトリを作成
+    const mediaRoot = path.join(__dirname, '../../media');
+    const recordingsPath = path.join(__dirname, '../../recordings');
+    
+    [mediaRoot, path.join(mediaRoot, 'live'), recordingsPath].forEach(dir => {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+        console.log(`[Stream] Created directory: ${dir}`);
+      }
+    });
+
+    const config = {
+      logType: 3,
+      rtmp: {
+        port: parseInt(process.env.RTMP_PORT) || 1935,
+        chunk_size: 60000,
+        gop_cache: true,
+        ping: 30,
+        ping_timeout: 60
+      },
+      http: {
+        port: parseInt(process.env.HTTP_FLV_PORT) || 8000,
+        mediaroot: mediaRoot,
+        allow_origin: '*'
+      },
+      trans: {
+        ffmpeg: '/usr/bin/ffmpeg',
+        tasks: [
+          {
+            app: 'live',
+            hls: true,
+            hlsFlags: '[hls_time=2:hls_list_size=3:hls_flags=delete_segments]',
+            hlsKeep: true,
+            dash: false,
+            mediaroot: mediaRoot
+          }
+        ]
+      }
+    };
+
+    this.nms = new NodeMediaServer(config);
+    this.setupEventHandlers();
+    
+    console.log(`[Stream] MediaRoot: ${mediaRoot}`);
+    console.log(`[Stream] Recordings: ${recordingsPath}`);
+    
+    return this.nms;
+  }
+
+  setupEventHandlers() {
+    this.nms.on('preConnect', (id, args) => {
+      console.log('[Stream] PreConnect:', id);
+    });
+
+    this.nms.on('postConnect', (id, args) => {
+      console.log('[Stream] PostConnect:', id);
+    });
+
+    this.nms.on('doneConnect', (id, args) => {
+      console.log('[Stream] DoneConnect:', id);
+    });
+
+    this.nms.on('prePublish', async (id, StreamPath, args) => {
+      await this.handlePrePublish(id, StreamPath, args);
+    });
+
+    this.nms.on('postPublish', async (id, StreamPath, args) => {
+      await this.handlePostPublish(id, StreamPath, args);
+    });
+
+    this.nms.on('donePublish', async (id, StreamPath, args) => {
+      await this.handleDonePublish(id, StreamPath, args);
+    });
+  }
+
+  async handlePrePublish(id, streamPath, args) {
+    try {
+      const streamKey = streamPath.split('/').pop();
+      
+      console.log(`[Stream] PrePublish: streamKey=${streamKey}`);
+      
+      const user = await authService.getUserByStreamKey(streamKey);
+      
+      if (!user) {
+        console.log(`[Stream] Authentication failed for key: ${streamKey}`);
+        const session = this.nms.getSession(id);
+        if (session && session.reject) session.reject();
+        return;
+      }
+
+      console.log(`[Stream] User authenticated: ${user.username}`);
+
+      if (!user.isActive) {
+        console.log(`[Stream] User inactive: ${user.username}`);
+        const session = this.nms.getSession(id);
+        if (session && session.reject) session.reject();
+        return;
+      }
+
+      const quotaStatus = await quotaService.getQuotaStatus(user.id);
+      if (quotaStatus.streamingUsedBytes >= quotaStatus.streamingLimitBytes) {
+        console.log(`[Stream] Quota exceeded for user: ${user.username}`);
+        const session = this.nms.getSession(id);
+        if (session && session.reject) session.reject();
+        
+        if (discordService && discordService.sendQuotaAlert) {
+          await discordService.sendQuotaAlert({
+            username: user.username,
+            quotaType: 'streaming',
+            used: quotaStatus.streamingUsedBytes,
+            limit: quotaStatus.streamingLimitBytes
+          });
+        }
+        
+        return;
+      }
+
+      console.log(`[Stream] Pre-publish accepted for user: ${user.username}`);
+      
+      this.activeSessions.set(streamKey, {
+        id,
+        user,
+        startTime: new Date(),
+        bytesStreamed: 0n,
+        sessionId: null
+      });
+
+    } catch (error) {
+      console.error('[Stream] Pre-publish error:', error);
+      const session = this.nms.getSession(id);
+      if (session && session.reject) session.reject();
+    }
+  }
+
+  async handlePostPublish(id, streamPath, args) {
+    try {
+      const streamKey = streamPath.split('/').pop();
+      const sessionInfo = this.activeSessions.get(streamKey);
+      
+      if (!sessionInfo) {
+        console.log(`[Stream] No session info for streamKey: ${streamKey}`);
+        return;
+      }
+
+      console.log(`[Stream] PostPublish for user: ${sessionInfo.user.username}`);
+
+      const streamSession = await prisma.streamSession.create({
+        data: {
+          userId: sessionInfo.user.id,
+          streamKey,
+          status: 'live'
+        }
+      });
+
+      sessionInfo.sessionId = streamSession.id;
+      this.activeSessions.set(streamKey, sessionInfo);
+
+      if (recordingService && recordingService.startRecording) {
+        await recordingService.startRecording(streamKey, sessionInfo.user);
+      }
+
+      this.startQuotaMonitoring(streamKey);
+
+      if (discordService && discordService.sendStreamStart) {
+        await discordService.sendStreamStart({
+          username: sessionInfo.user.username,
+          streamKey
+        });
+      }
+
+    } catch (error) {
+      console.error('[Stream] Post-publish error:', error);
+    }
+  }
+
+  async handleDonePublish(id, streamPath, args) {
+    try {
+      const streamKey = streamPath.split('/').pop();
+      const sessionInfo = this.activeSessions.get(streamKey);
+      
+      if (!sessionInfo) {
+        console.log(`[Stream] No session info for streamKey: ${streamKey}`);
+        return;
+      }
+
+      console.log(`[Stream] DonePublish for user: ${sessionInfo.user.username}`);
+
+      if (sessionInfo.quotaInterval) {
+        clearInterval(sessionInfo.quotaInterval);
+      }
+
+      const duration = Math.floor((new Date() - sessionInfo.startTime) / 1000);
+
+      if (sessionInfo.sessionId) {
+        await prisma.streamSession.update({
+          where: { id: sessionInfo.sessionId },
+          data: {
+            status: 'stopped',
+            endedAt: new Date(),
+            bytesStreamed: sessionInfo.bytesStreamed
+          }
+        });
+      }
+
+      if (recordingService && recordingService.stopRecording) {
+        await recordingService.stopRecording(streamKey);
+      }
+
+      if (discordService && discordService.sendStreamStop) {
+        await discordService.sendStreamStop({
+          username: sessionInfo.user.username,
+          streamKey,
+          duration,
+          bytesStreamed: sessionInfo.bytesStreamed
+        });
+      }
+
+      this.activeSessions.delete(streamKey);
+
+    } catch (error) {
+      console.error('[Stream] Done-publish error:', error);
+    }
+  }
+
+  startQuotaMonitoring(streamKey) {
+    const sessionInfo = this.activeSessions.get(streamKey);
+    if (!sessionInfo) return;
+
+    sessionInfo.quotaInterval = setInterval(async () => {
+      try {
+        const session = this.nms.getSession(sessionInfo.id);
+        if (!session) {
+          clearInterval(sessionInfo.quotaInterval);
+          return;
+        }
+
+        const stats = session.getStats ? session.getStats() : { outBytes: 0 };
+        const newBytes = BigInt(stats.outBytes || 0);
+        const bytesAdded = newBytes - sessionInfo.bytesStreamed;
+
+        if (bytesAdded > 0n) {
+          const quotaResult = await quotaService.checkAndUpdateStreamingQuota(
+            sessionInfo.user.id,
+            Number(bytesAdded)
+          );
+
+          sessionInfo.bytesStreamed = newBytes;
+          this.activeSessions.set(streamKey, sessionInfo);
+
+          if (!quotaResult.allowed) {
+            console.log(`[Stream] Quota exceeded, terminating stream for: ${sessionInfo.user.username}`);
+            if (session.reject) session.reject();
+            
+            await prisma.streamSession.update({
+              where: { id: sessionInfo.sessionId },
+              data: { status: 'quota_exceeded' }
+            });
+
+            if (discordService && discordService.sendQuotaAlert) {
+              await discordService.sendQuotaAlert({
+                username: sessionInfo.user.username,
+                quotaType: 'streaming',
+                action: 'stream_terminated'
+              });
+            }
+
+            clearInterval(sessionInfo.quotaInterval);
+          }
+        }
+      } catch (error) {
+        console.error('[Stream] Quota monitoring error:', error);
+      }
+    }, 10000);
+  }
+
+  getActiveSessions() {
+    return Array.from(this.activeSessions.entries()).map(([streamKey, info]) => ({
+      streamKey,
+      username: info.user.username,
+      startTime: info.startTime,
+      bytesStreamed: Number(info.bytesStreamed),
+      duration: Math.floor((new Date() - info.startTime) / 1000)
+    }));
+  }
+
+  run() {
+    if (this.nms) {
+      this.nms.run();
+      console.log('[Stream] RTMP server started on port', process.env.RTMP_PORT || 1935);
+      console.log('[Stream] HTTP-FLV server started on port', process.env.HTTP_FLV_PORT || 8000);
+    } else {
+      console.error('[Stream] NMS not initialized');
+    }
+  }
+}
+
+module.exports = new StreamingService();

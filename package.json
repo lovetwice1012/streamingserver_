@@ -1,0 +1,40 @@
+{
+  "name": "streaming-server",
+  "version": "1.0.0",
+  "description": "Node.js streaming server with RTMP proxy, recording, and quota management",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "nodemon src/index.js",
+    "start": "node src/index.js",
+    "setup": "prisma generate && prisma db push --accept-data-loss && node scripts/create-admin.js",
+    "db:push": "prisma db push",
+    "db:studio": "prisma studio"
+  },
+  "keywords": [
+    "streaming",
+    "rtmp",
+    "rtsp",
+    "mediamtx",
+    "recording"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.478.0",
+    "@aws-sdk/lib-storage": "^3.478.0",
+    "@prisma/client": "^5.7.1",
+    "axios": "^1.6.2",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "fluent-ffmpeg": "^2.1.2",
+    "jsonwebtoken": "^9.0.2",
+    "node-media-server": "^4.1.0",
+    "node-rtsp-stream": "^0.0.9"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2",
+    "prisma": "^5.7.1"
+  }
+}

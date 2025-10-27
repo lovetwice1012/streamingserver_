@@ -1,0 +1,64 @@
+# MediaMTX Configuration
+
+# API and metrics
+api: yes
+apiAddress: 0.0.0.0:9997
+metrics: yes
+metricsAddress: 0.0.0.0:9998
+
+# RTSP configuration
+rtspAddress: 0.0.0.0:8554
+protocols: [tcp, udp]
+encryption: "no"
+rtpAddress: :8000
+rtcpAddress: :8001
+
+# RTMP configuration
+rtmpAddress: 0.0.0.0:1935
+rtmpEncryption: "no"
+
+# HLS configuration
+hlsAddress: 0.0.0.0:8888
+hlsEncryption: no
+hlsServerKey: server.key
+hlsServerCert: server.crt
+hlsAlwaysRemux: no
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsSegmentMaxSize: 50M
+
+# WebRTC configuration
+webrtcAddress: 0.0.0.0:8889
+webrtcEncryption: no
+
+# Path configuration
+paths:
+  # Accept streams from streaming-server
+  all:
+    # Allow publishing from streaming-server
+    publishUser: ""
+    publishPass: ""
+    publishIPs: []
+    
+    # Allow reading
+    readUser: ""
+    readPass: ""
+    readIPs: []
+    
+    # Recording (optional)
+    record: no
+    recordPath: ./recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+    recordFormat: mp4
+    recordPartDuration: 1s
+    recordSegmentDuration: 1h
+    
+    # Run on init (optional - pull from streaming-server)
+    # runOnInit: ffmpeg -i rtmp://streaming-server:1935/live/$name -c copy -f rtsp rtsp://localhost:8554/$name
+    
+    # On demand (pull from external source if not available)
+    runOnDemand: ""
+    runOnDemandRestart: no
+    runOnDemandStartTimeout: 10s
+    runOnDemandCloseAfter: 10s

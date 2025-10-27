@@ -1,0 +1,106 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String          @id @default(uuid())
+  username       String          @unique
+  email          String          @unique
+  password       String
+  streamKey      String          @unique @default(uuid())
+  role           String          @default("user")
+  isActive       Boolean         @default(true)
+  plan           String          @default("free")
+  planPrice      Float           @default(0)
+  storageLimit   BigInt          @default(1073741824)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  quota          Quota?
+  recordings     Recording[]
+  streamSessions StreamSession[]
+
+  @@index([email])
+  @@index([streamKey])
+  @@index([plan])
+}
+
+model Recording {
+  id        String   @id @default(uuid())
+  userId    String
+  filename  String
+  s3Key     String
+  s3Url     String
+  sizeBytes BigInt
+  duration  Int
+  streamKey String
+  startedAt DateTime
+  endedAt   DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model Quota {
+  id                  String   @id @default(uuid())
+  userId              String   @unique
+  recordingUsedBytes  BigInt   @default(0)
+  recordingLimitBytes BigInt
+  streamingUsedBytes  BigInt   @default(0)
+  streamingLimitBytes BigInt
+  streamingResetAt    DateTime
+  viewingUsedBytes    BigInt   @default(0)
+  viewingLimitBytes   BigInt
+  viewingResetAt      DateTime
+  updatedAt           DateTime @updatedAt
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model StreamSession {
+  id            String    @id @default(uuid())
+  userId        String
+  streamKey     String
+  bytesStreamed BigInt    @default(0)
+  bytesDelivered BigInt   @default(0)
+  startedAt     DateTime  @default(now())
+  endedAt       DateTime?
+  status        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([streamKey])
+  @@index([status])
+}
+
+model SystemLog {
+  id        String   @id @default(uuid())
+  level     String
+  category  String
+  message   String
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([category])
+  @@index([level])
+  @@index([createdAt])
+}
+
+model Plan {
+  id            String   @id @default(uuid())
+  name          String   @unique
+  description   String?
+  price         Float
+  maxStreams    Int
+  maxResolution String
+  features      Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}

@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: streaming-postgres
+    environment:
+      POSTGRES_USER: streamuser
+      POSTGRES_PASSWORD: streampass
+      POSTGRES_DB: streamingdb
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - streaming-network
+    restart: unless-stopped
+
+  streaming-server:
+    build: .
+    container_name: streaming-server
+    ports:
+      - "0.0.0.0:3000:3000"    # HTTP API
+      - "0.0.0.0:1935:1935"    # RTMP
+      - "0.0.0.0:8000:8000"    # HLS (node-media-server)
+    environment:
+      DATABASE_URL: postgresql://streamuser:streampass@postgres:5432/streamingdb
+      PORT: 3000
+      RTMP_PORT: 1935
+      JWT_SECRET: ${JWT_SECRET}
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_REGION: ${S3_REGION}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+      S3_BUCKET: ${S3_BUCKET}
+      MEDIAMTX_RTMP_URL: rtmp://mediamtx:1935
+      MEDIAMTX_API_URL: http://mediamtx:9997
+      QUOTA_RECORDING_GB: ${QUOTA_RECORDING_GB:-1}
+      QUOTA_MONTHLY_STREAMING_GB: ${QUOTA_MONTHLY_STREAMING_GB:-100}
+      DISCORD_WEBHOOK_AUTH: ${DISCORD_WEBHOOK_AUTH}
+      DISCORD_WEBHOOK_STREAM_START: ${DISCORD_WEBHOOK_STREAM_START}
+      DISCORD_WEBHOOK_STREAM_STOP: ${DISCORD_WEBHOOK_STREAM_STOP}
+      DISCORD_WEBHOOK_RECORDING: ${DISCORD_WEBHOOK_RECORDING}
+      DISCORD_WEBHOOK_QUOTA: ${DISCORD_WEBHOOK_QUOTA}
+      DISCORD_WEBHOOK_ERROR: ${DISCORD_WEBHOOK_ERROR}
+    volumes:
+      - ./recordings:/app/recordings
+      - ./logs:/app/logs
+    depends_on:
+      - postgres
+    networks:
+      - streaming-network
+    restart: unless-stopped
+
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: mediamtx
+    ports:
+      - "0.0.0.0:8554:8554"    # RTSP
+      - "0.0.0.0:1936:1935"    # RTMP (MediaMTX)
+      - "0.0.0.0:8888:8888"    # HLS
+      - "0.0.0.0:8889:8889"    # WebRTC
+      - "0.0.0.0:9997:9997"    # API
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml
+    networks:
+      - streaming-network
+    restart: unless-stopped
+
+networks:
+  streaming-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
