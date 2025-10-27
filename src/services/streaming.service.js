@@ -5,6 +5,7 @@ const authService = require('./auth.service');
 const quotaService = require('./quota.service');
 const recordingService = require('./recording.service');
 const discordService = require('./discord.service');
+const websocketService = require('./websocket.service');
 const prisma = require('../db');
 
 class StreamingService {
@@ -301,6 +302,11 @@ class StreamingService {
       }
 
       console.log(`[Stream] Done-publish for user: ${username}`);
+      if (user?.id) {
+        websocketService.emitQuotaUpdate(user.id).catch(err => {
+          console.error('[Stream] Failed to emit quota update on donePublish:', err);
+        });
+      }
       this.activeSessions.delete(streamKey);
     } catch (error) {
       console.error('[Stream] Done-publish error:', error);
@@ -525,6 +531,12 @@ class StreamingService {
       }
     }
 
+    if (quotaResult && sessionInfo?.user?.id) {
+      websocketService.emitQuotaUpdate(sessionInfo.user.id).catch(err => {
+        console.error('[Stream] Failed to emit streaming quota update:', err);
+      });
+    }
+
     return { bytesAdded, quota: quotaResult };
   }
 
@@ -583,6 +595,12 @@ class StreamingService {
       }
     }
 
+    if (quotaResult && sessionInfo?.user?.id) {
+      websocketService.emitQuotaUpdate(sessionInfo.user.id).catch(err => {
+        console.error('[Stream] Failed to emit viewing quota update:', err);
+      });
+    }
+
     return { increment: totalIncrement, quota: quotaResult };
   }
 
@@ -619,6 +637,12 @@ class StreamingService {
         quotaType: 'viewing',
         action: 'viewers_disconnected'
       }).catch(err => console.error('[Stream] Discord quota alert failed:', err));
+    }
+
+    if (user?.id) {
+      websocketService.emitQuotaUpdate(user.id).catch(err => {
+        console.error('[Stream] Failed to emit quota update after viewing quota exceeded:', err);
+      });
     }
   }
 
@@ -675,6 +699,30 @@ class StreamingService {
           : null
       };
     });
+  }
+
+  async getSessionForUser(userId) {
+    if (!userId) {
+      return null;
+    }
+
+    for (const sessionInfo of this.activeSessions.values()) {
+      const ensured = await this.ensureSessionUser(sessionInfo, sessionInfo.streamKey) || sessionInfo;
+      if (ensured?.user?.id === userId) {
+        const viewerCount = ensured.viewerSessions ? ensured.viewerSessions.size : 0;
+        return {
+          sessionId: ensured.sessionId ?? null,
+          streamKey: ensured.streamKey,
+          status: ensured.status ?? 'live',
+          startedAt: ensured.startTime ?? null,
+          bytesStreamed: (ensured.bytesStreamed ?? 0n).toString(),
+          bytesDelivered: (ensured.bytesDelivered ?? 0n).toString(),
+          viewerCount
+        };
+      }
+    }
+
+    return null;
   }
 
   run() {

@@ -7,6 +7,7 @@ import Recordings from './pages/Recordings';
 import Quota from './pages/Quota';
 import Plans from './pages/Plans';
 import Settings from './pages/Settings';
+import Streaming from './pages/Streaming';
 import AdminUsers from './pages/admin/Users';
 import AdminSessions from './pages/admin/Sessions';
 import AdminRecordings from './pages/admin/Recordings';
@@ -43,6 +44,7 @@ function App() {
       <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
         <Route index element={<Navigate to="/dashboard" />} />
         <Route path="dashboard" element={<Dashboard />} />
+        <Route path="streaming" element={<Streaming />} />
         <Route path="recordings" element={<Recordings />} />
         <Route path="quota" element={<Quota />} />
         <Route path="plans" element={<Plans />} />

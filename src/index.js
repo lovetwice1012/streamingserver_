@@ -4,13 +4,16 @@ BigInt.prototype.toJSON = function() {
 };
 
 require('dotenv').config();
+const http = require('http');
 const express = require('express');
 const cors = require('cors');
 const streamingService = require('./services/streaming.service');
+const websocketService = require('./services/websocket.service');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
+const server = http.createServer(app);
 
 // Middleware
 app.use(cors({
@@ -26,10 +29,11 @@ app.use('/api/rtsp', require('./routes/rtsp.routes'));
 app.use('/api/quota', require('./routes/quota.routes'));
 app.use('/api/plan', require('./routes/plan.routes'));
 app.use('/api/admin', require('./routes/admin.routes'));
+app.use('/api/streaming', require('./routes/streaming.routes'));
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({ 
+  res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     services: {
@@ -39,10 +43,13 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Start HTTP API server - すべてのインターフェースでリッスン
-app.listen(PORT, HOST, () => {
+// Initialize WebSocket support
+websocketService.init(server);
+
+// Start HTTP API server - すべてのインターフェースでリスン
+server.listen(PORT, HOST, () => {
   console.log(`[API] Server running on http://${HOST}:${PORT}`);
-  console.log(`[API] Accepting connections from all hosts`);
+  console.log('[API] Accepting connections from all hosts');
 });
 
 // Initialize and start RTMP server

@@ -77,6 +77,52 @@ class QuotaService {
     return this.ensureQuota(userId);
   }
 
+  formatQuotaResponse(quota) {
+    if (!quota) {
+      return null;
+    }
+
+    const recordingUsed = Number(quota.recordingUsedBytes ?? 0n);
+    const recordingLimit = Number(quota.recordingLimitBytes ?? 0n);
+    const streamingUsed = Number(quota.streamingUsedBytes ?? 0n);
+    const streamingLimit = Number(quota.streamingLimitBytes ?? 0n);
+    const viewingUsed = Number(quota.viewingUsedBytes ?? 0n);
+    const viewingLimit = Number(
+      (quota.viewingLimitBytes ?? quota.streamingLimitBytes) ?? 0n
+    );
+
+    const toPercent = (used, limit) => {
+      if (!limit || limit <= 0) return '0.00';
+      return ((used / limit) * 100).toFixed(2);
+    };
+
+    return {
+      recording: {
+        used: (quota.recordingUsedBytes ?? 0n).toString(),
+        limit: (quota.recordingLimitBytes ?? 0n).toString(),
+        usedGB: recordingUsed / (1024 ** 3),
+        limitGB: recordingLimit / (1024 ** 3),
+        percentUsed: toPercent(recordingUsed, recordingLimit)
+      },
+      streaming: {
+        used: (quota.streamingUsedBytes ?? 0n).toString(),
+        limit: (quota.streamingLimitBytes ?? 0n).toString(),
+        usedGB: streamingUsed / (1024 ** 3),
+        limitGB: streamingLimit / (1024 ** 3),
+        percentUsed: toPercent(streamingUsed, streamingLimit),
+        resetAt: quota.streamingResetAt
+      },
+      viewing: {
+        used: (quota.viewingUsedBytes ?? 0n).toString(),
+        limit: (quota.viewingLimitBytes ?? quota.streamingLimitBytes ?? 0n).toString(),
+        usedGB: viewingUsed / (1024 ** 3),
+        limitGB: viewingLimit / (1024 ** 3),
+        percentUsed: toPercent(viewingUsed, viewingLimit),
+        resetAt: quota.viewingResetAt
+      }
+    };
+  }
+
   async ensureQuota(userId) {
     let quota = await prisma.quota.findUnique({
       where: { userId }

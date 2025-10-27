@@ -1,13 +1,14 @@
 import { Link, useLocation } from 'react-router-dom';
-import { 
-  LayoutDashboard, 
-  Video, 
-  Gauge, 
-  Users, 
-  Activity, 
+import {
+  LayoutDashboard,
+  Video,
+  Gauge,
+  Users,
+  Activity,
   Database,
   BarChart3,
   Radio,
+  RadioTower,
   CreditCard,
   Settings as SettingsIcon
 } from 'lucide-react';
@@ -20,10 +21,11 @@ export default function Sidebar() {
 
   const navItems = [
     { to: '/dashboard', icon: LayoutDashboard, label: 'ダッシュボード' },
+    { to: '/streaming', icon: RadioTower, label: '配信' },
     { to: '/recordings', icon: Video, label: '録画' },
     { to: '/quota', icon: Gauge, label: 'クォータ' },
     { to: '/plans', icon: CreditCard, label: 'プラン' },
-    { to: '/settings', icon: SettingsIcon, label: '設定' },
+    { to: '/settings', icon: SettingsIcon, label: '設定' }
   ];
 
   const adminNavItems = [
@@ -31,7 +33,7 @@ export default function Sidebar() {
     { to: '/admin/users', icon: Users, label: 'ユーザー管理' },
     { to: '/admin/sessions', icon: Activity, label: '配信セッション' },
     { to: '/admin/recordings', icon: Database, label: '全録画' },
-    { to: '/admin/plans', icon: SettingsIcon, label: 'プラン管理' },
+    { to: '/admin/plans', icon: SettingsIcon, label: 'プラン管理' }
   ];
 
   return (
@@ -50,7 +52,7 @@ export default function Sidebar() {
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive = location.pathname === item.to;
-          
+
           return (
             <Link
               key={item.to}
@@ -71,13 +73,13 @@ export default function Sidebar() {
           <>
             <div className="pt-4 pb-2 px-4">
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                管理者
+                管理
               </p>
             </div>
             {adminNavItems.map((item) => {
               const Icon = item.icon;
               const isActive = location.pathname === item.to;
-              
+
               return (
                 <Link
                   key={item.to}
