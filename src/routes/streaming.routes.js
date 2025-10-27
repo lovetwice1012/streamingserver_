@@ -3,6 +3,7 @@ const prisma = require('../db');
 const { authenticate } = require('../middleware/auth.middleware');
 const quotaService = require('../services/quota.service');
 const streamingService = require('../services/streaming.service');
+const rtspService = require('../services/rtsp.service');
 
 const router = express.Router();
 
@@ -15,6 +16,7 @@ const shouldOmitPort = (protocol, port) => {
   if (protocol === 'https' && numeric === 443) return true;
   if (protocol === 'rtmp' && numeric === 1935) return true;
   if (protocol === 'rtmps' && numeric === 443) return true;
+  if (protocol === 'rtsp' && numeric === 554) return true;
   return false;
 };
 
@@ -53,14 +55,17 @@ router.get('/info', authenticate, async (req, res) => {
 
     const ingestBaseOverride = removeTrailingSlash(process.env.STREAM_INGEST_BASE_URL);
     const playbackBaseOverride = removeTrailingSlash(process.env.STREAM_PLAYBACK_BASE_URL);
+    const rtspBaseOverride = removeTrailingSlash(process.env.STREAM_RTSP_BASE_URL);
 
     const ingestProtocol = (process.env.STREAM_INGEST_PROTOCOL || 'rtmp').toLowerCase();
     const playbackProtocol = (
       process.env.STREAM_PLAYBACK_PROTOCOL || protocolFromRequest || 'http'
     ).toLowerCase();
+    const rtspProtocol = (process.env.STREAM_RTSP_PROTOCOL || 'rtsp').toLowerCase();
 
     const ingestHost = process.env.STREAM_INGEST_HOST || process.env.DOMAIN || hostFromRequest;
     const playbackHost = process.env.STREAM_PLAYBACK_HOST || process.env.DOMAIN || hostFromRequest;
+    const rtspHost = process.env.STREAM_RTSP_HOST || process.env.DOMAIN || hostFromRequest;
 
     const ingestPort = process.env.STREAM_INGEST_PORT || process.env.RTMP_PORT || 1935;
     const playbackPort = (
@@ -70,12 +75,15 @@ router.get('/info', authenticate, async (req, res) => {
         ? 443
         : (process.env.HTTP_FLV_PORT || 8000))
     );
+    const rtspPort = process.env.STREAM_RTSP_PORT || process.env.MEDIAMTX_RTSP_PORT || 8554;
 
     const ingestPortPart = shouldOmitPort(ingestProtocol, ingestPort) ? '' : `:${ingestPort}`;
     const playbackPortPart = shouldOmitPort(playbackProtocol, playbackPort) ? '' : `:${playbackPort}`;
+    const rtspPortPart = shouldOmitPort(rtspProtocol, rtspPort) ? '' : `:${rtspPort}`;
 
     const ingestBase = ingestBaseOverride || `${ingestProtocol}://${ingestHost}${ingestPortPart}`;
     const playbackBase = playbackBaseOverride || `${playbackProtocol}://${playbackHost}${playbackPortPart}`;
+    const rtspBase = rtspBaseOverride || `${rtspProtocol}://${rtspHost}${rtspPortPart}`;
 
     const streamKey = user.streamKey;
     const ingestUrl = `${ingestBase}/live`;
@@ -83,6 +91,9 @@ router.get('/info', authenticate, async (req, res) => {
 
     const hlsUrl = `${playbackBase}/live/${streamKey}/index.m3u8`;
     const flvUrl = `${playbackBase}/live/${streamKey}.flv`;
+
+    const rtspPath = rtspService.getLivePlaybackPath(streamKey);
+    const rtspUrl = `${rtspBase}${rtspPath}`;
 
     const quota = await quotaService.getQuotaStatus(user.id);
     const quotaPayload = quotaService.formatQuotaResponse(quota);
@@ -107,6 +118,13 @@ router.get('/info', authenticate, async (req, res) => {
       playback: {
         hls: hlsUrl,
         flv: flvUrl,
+        rtsp: {
+          url: rtspUrl,
+          host: rtspHost,
+          protocol: rtspProtocol,
+          port: Number(rtspPort),
+          path: rtspPath
+        },
         host: playbackHost,
         protocol: playbackProtocol,
         port: Number(playbackPort)

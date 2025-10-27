@@ -6,6 +6,7 @@ const quotaService = require('./quota.service');
 const recordingService = require('./recording.service');
 const discordService = require('./discord.service');
 const websocketService = require('./websocket.service');
+const rtspService = require('./rtsp.service');
 const prisma = require('../db');
 
 class StreamingService {
@@ -229,6 +230,15 @@ class StreamingService {
       // start quota monitoring
       this.startQuotaMonitoring(streamKey);
 
+      try {
+        const restream = rtspService.startLiveRestream(streamKey);
+        if (restream?.outputUrl) {
+          console.log(`[Stream] RTSP restream publishing to ${restream.outputUrl}`);
+        }
+      } catch (restreamError) {
+        console.error(`[Stream] Failed to start RTSP restream for ${streamKey}:`, restreamError);
+      }
+
       if (discordService?.sendStreamStart) {
         await discordService.sendStreamStart({ username: sessionInfo.user.username, streamKey });
       }
@@ -290,6 +300,7 @@ class StreamingService {
       }
 
       if (recordingService?.stopRecording) await recordingService.stopRecording(streamKey);
+      rtspService.stopLiveRestream(streamKey);
 
       if (user && discordService?.sendStreamStop) {
         await discordService.sendStreamStop({

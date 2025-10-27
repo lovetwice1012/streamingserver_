@@ -268,6 +268,11 @@ Authorization: Bearer <token>
 
 ### RTSP プロキシ
 
+#### ライブ RTSP 視聴
+- 配信が開始されると MediaMTX に自動でリストリームされ、`rtsp://<ホスト>:<ポート>/live/<streamKey>` で視聴できます。
+- `/api/streaming/info` のレスポンス `playback.rtsp.url` からも同じ URL を取得できます。
+- ホスト名やポート番号は `.env` の `STREAM_RTSP_*` または `MEDIAMTX_RTSP_PORT` で調整できます。
+
 #### ライブ配信 RTSP 開始
 ```http
 POST /api/rtsp/live/:streamKey
