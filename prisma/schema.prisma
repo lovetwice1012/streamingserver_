@@ -57,7 +57,7 @@ model Quota {
   streamingResetAt    DateTime
   viewingUsedBytes    BigInt   @default(0)
   viewingLimitBytes   BigInt   @default(0)
-  viewingResetAt      DateTime @default(0)
+  viewingResetAt      DateTime @default(now())
   updatedAt           DateTime @updatedAt
   user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
