@@ -74,21 +74,121 @@ class RecordingService {
   }
 
   async stopRecording(streamKey) {
+    let recordingRef = null;
+    let markedStopping = false;
     try {
       const recording = this.activeRecordings.get(streamKey);
       if (!recording) return;
+      recordingRef = recording;
 
       console.log(`[Recording] Stopping recording for ${recording.user.username}`);
 
-      // Kill FFmpeg process
-      recording.process.kill('SIGINT');
+      if (recording.stopping) {
+        return;
+      }
+      recording.stopping = true;
+      markedStopping = true;
 
-      // Wait a bit for file to be finalized
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      const ffmpegCommand = recording.process;
+      const ffmpegProc = ffmpegCommand?.ffmpegProc;
 
-      // Check if file exists and get size
-      if (!fs.existsSync(recording.filePath)) {
-        console.error('[Recording] File not found:', recording.filePath);
+      const exitPromise = new Promise(resolve => {
+        let settled = false;
+
+        const cleanup = () => {
+          if (ffmpegCommand) {
+            if (typeof ffmpegCommand.off === 'function') {
+              ffmpegCommand.off('end', onEnd);
+              ffmpegCommand.off('error', onError);
+            } else {
+              ffmpegCommand.removeListener?.('end', onEnd);
+              ffmpegCommand.removeListener?.('error', onError);
+            }
+          }
+          if (ffmpegProc) {
+            ffmpegProc.removeListener?.('exit', onExit);
+            ffmpegProc.removeListener?.('close', onClose);
+          }
+        };
+
+        const settle = (result) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          resolve(result);
+        };
+
+        const onEnd = () => settle({ type: 'end' });
+        const onError = (error) => settle({ type: 'error', error });
+        const onExit = (code, signal) => settle({ type: 'exit', code, signal });
+        const onClose = (code, signal) => settle({ type: 'close', code, signal });
+
+        if (ffmpegCommand) {
+          ffmpegCommand.once('end', onEnd);
+          ffmpegCommand.once('error', onError);
+        }
+
+        if (ffmpegProc) {
+          ffmpegProc.once('exit', onExit);
+          ffmpegProc.once('close', onClose);
+        } else {
+          settle({ type: 'no-process' });
+        }
+      });
+
+      const sendGracefulStop = () => {
+        if (ffmpegProc?.stdin && !ffmpegProc.stdin.destroyed) {
+          try {
+            ffmpegProc.stdin.write('q');
+            ffmpegProc.stdin.end();
+            return true;
+          } catch (error) {
+            console.warn('[Recording] Failed to send graceful stop signal to FFmpeg:', error);
+          }
+        }
+        return false;
+      };
+
+      const graceful = sendGracefulStop();
+      if (!graceful && ffmpegCommand?.kill && ffmpegCommand.ffmpegProc) {
+        ffmpegCommand.kill('SIGINT');
+      }
+
+      const exitResult = await Promise.race([
+        exitPromise,
+        new Promise(resolve => setTimeout(() => resolve({ type: 'timeout' }), 10000))
+      ]);
+
+      if (exitResult?.type === 'error') {
+        console.warn('[Recording] FFmpeg reported error while stopping:', exitResult.error?.message || exitResult.error);
+      }
+
+      if (exitResult?.type === 'exit' && exitResult.code && exitResult.code !== 0) {
+        console.warn(`[Recording] FFmpeg exited with code ${exitResult.code} (signal: ${exitResult.signal || 'none'})`);
+      }
+
+      if (exitResult?.type === 'timeout') {
+        console.warn('[Recording] FFmpeg did not exit within timeout, forcing termination');
+        if (ffmpegCommand?.kill && ffmpegCommand.ffmpegProc) {
+          ffmpegCommand.kill('SIGTERM');
+        }
+        await exitPromise;
+      }
+
+      const waitForFile = async () => {
+        const attempts = 5;
+        for (let attempt = 0; attempt < attempts; attempt += 1) {
+          if (fs.existsSync(recording.filePath)) {
+            return true;
+          }
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        return false;
+      };
+
+      const fileReady = await waitForFile();
+      if (!fileReady) {
+        console.error('[Recording] File not found after stopping FFmpeg:', recording.filePath);
         this.activeRecordings.delete(streamKey);
         return;
       }
@@ -165,6 +265,10 @@ class RecordingService {
         context: 'recording_stop',
         error: error.message
       });
+    } finally {
+      if (markedStopping && recordingRef) {
+        delete recordingRef.stopping;
+      }
     }
   }
 
