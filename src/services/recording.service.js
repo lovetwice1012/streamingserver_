@@ -20,7 +20,7 @@ class RecordingService {
     });
   }
 
-  async startRecording(streamKey, user) {
+  async startRecording(streamKey, user, options = {}) {
     try {
       const recordingDir = process.env.RECORDING_DIR || './recordings';
       if (!fs.existsSync(recordingDir)) {
@@ -31,7 +31,9 @@ class RecordingService {
       const filename = `${user.username}_${streamKey}_${timestamp}.mp4`;
       const filePath = path.join(recordingDir, filename);
 
-      const rtmpUrl = `rtmp://localhost:${process.env.RTMP_PORT || 1935}/live/${streamKey}`;
+      const sanitizedAppName = (options.appName || '').toString().replace(/^\/+|\/+$/g, '');
+      const appSegment = sanitizedAppName ? `/${sanitizedAppName}` : '';
+      const rtmpUrl = `rtmp://localhost:${process.env.RTMP_PORT || 1935}${appSegment}/${streamKey}`;
 
       console.log(`[Recording] Starting recording for ${user.username}: ${filename}`);
 
@@ -65,7 +67,8 @@ class RecordingService {
         filePath,
         filename,
         startTime: new Date(),
-        user
+        user,
+        appName: sanitizedAppName || null
       });
 
     } catch (error) {

@@ -22,10 +22,12 @@ class RTSPService {
     return `${basePath}/${streamKey}`;
   }
 
-  buildIngestUrl(streamKey) {
+  buildIngestUrl(streamKey, appName = null) {
     const port = Number(process.env.RTMP_PORT) || 1935;
     const host = process.env.RTMP_INGEST_HOST || process.env.STREAM_INGEST_HOST || '127.0.0.1';
-    return `rtmp://${host}:${port}/live/${streamKey}`;
+    const normalizedApp = (appName || '').toString().replace(/^\/+|\/+$/g, '');
+    const appSegment = normalizedApp ? `/${normalizedApp}` : '';
+    return `rtmp://${host}:${port}${appSegment}/${streamKey}`;
   }
 
   buildMediaMtxPublishUrl(streamKey) {
@@ -51,7 +53,7 @@ class RTSPService {
     return `rtmp://${host}:${port}${DEFAULT_LIVE_PATH}/${streamKey}`;
   }
 
-  startLiveRestream(streamKey) {
+  startLiveRestream(streamKey, options = {}) {
     if (!streamKey) {
       throw new Error('streamKey is required');
     }
@@ -63,7 +65,8 @@ class RTSPService {
     }
 
     const ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg';
-    const inputUrl = this.buildIngestUrl(streamKey);
+    const sanitizedAppName = (options.appName || '').toString().replace(/^\/+|\/+$/g, '');
+    const inputUrl = this.buildIngestUrl(streamKey, sanitizedAppName);
     const outputUrl = this.buildMediaMtxPublishUrl(streamKey);
 
     const args = [
@@ -87,7 +90,8 @@ class RTSPService {
       process: child,
       inputUrl,
       outputUrl,
-      startedAt: new Date()
+      startedAt: new Date(),
+      appName: sanitizedAppName || null
     };
 
     child.on('error', (error) => {
@@ -154,9 +158,11 @@ class RTSPService {
   }
 
   // Legacy: Start RTSP proxy for live stream (WebSocket playback)
-  startLiveRTSP(streamKey, port) {
+  startLiveRTSP(streamKey, port, options = {}) {
     try {
-      const rtmpUrl = `rtmp://localhost:${process.env.RTMP_PORT || 1935}/live/${streamKey}`;
+      const sanitizedAppName = (options.appName || '').toString().replace(/^\/+|\/+$/g, '');
+      const appSegment = sanitizedAppName ? `/${sanitizedAppName}` : '';
+      const rtmpUrl = `rtmp://localhost:${process.env.RTMP_PORT || 1935}${appSegment}/${streamKey}`;
 
       const stream = new Stream({
         name: `live_${streamKey}`,

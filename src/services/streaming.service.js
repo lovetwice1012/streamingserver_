@@ -15,6 +15,16 @@ class StreamingService {
     this.nms = null;
   }
 
+  extractStreamDetails(streamPath) {
+    const parts = (streamPath || '').split('/').filter(Boolean);
+    if (parts.length === 0) {
+      return { streamKey: null, appName: null };
+    }
+    const streamKey = parts.pop();
+    const appName = parts.length > 0 ? parts.join('/') : null;
+    return { streamKey, appName };
+  }
+
   init() {
     const mediaRoot = path.join(__dirname, '../../media');
     const recordingsPath = path.join(__dirname, '../../recordings');
@@ -120,7 +130,8 @@ class StreamingService {
         return;
       }
 
-      const streamKey = streamPath.split('/').filter(Boolean).pop();
+      const { streamKey } = this.extractStreamDetails(streamPath);
+      if (!streamKey) return;
       if (!streamKey) {
         console.error('[Stream] Pre-publish error: unable to determine stream key');
         session?.close?.();
@@ -177,7 +188,7 @@ class StreamingService {
     try {
       const streamPath = session?.streamPath;
       if (!streamPath) { session?.close?.(); return; }
-      const streamKey = streamPath.split('/').filter(Boolean).pop();
+      const { streamKey, appName } = this.extractStreamDetails(streamPath);
       if (!streamKey) { session?.close?.(); return; }
 
       let sessionInfo = this.activeSessions.get(streamKey);
@@ -195,7 +206,9 @@ class StreamingService {
           viewerSessions: new Map(),
           viewerQuotaExceeded: false,
           status: 'live',
-          streamKey
+          streamKey,
+          appName: appName || null,
+          streamPath
         };
       } else {
         if (!sessionInfo.viewerSessions) {
@@ -207,6 +220,8 @@ class StreamingService {
       sessionInfo.session = session;
       sessionInfo.id = session.id ?? sessionInfo.id;
       sessionInfo.streamKey = streamKey;
+      sessionInfo.appName = appName || null;
+      sessionInfo.streamPath = streamPath;
 
       sessionInfo = await this.ensureSessionUser(sessionInfo, streamKey);
       if (!sessionInfo?.user) {
@@ -225,13 +240,15 @@ class StreamingService {
       this.activeSessions.set(streamKey, sessionInfo);
 
       // start recording if available (recordingService should handle missing implementation)
-      if (recordingService?.startRecording) await recordingService.startRecording(streamKey, sessionInfo.user);
+      if (recordingService?.startRecording) {
+        await recordingService.startRecording(streamKey, sessionInfo.user, { appName });
+      }
 
       // start quota monitoring
       this.startQuotaMonitoring(streamKey);
 
       try {
-        const restream = rtspService.startLiveRestream(streamKey);
+        const restream = rtspService.startLiveRestream(streamKey, { appName });
         if (restream?.outputUrl) {
           console.log(`[Stream] RTSP restream publishing to ${restream.outputUrl}`);
         }
@@ -254,7 +271,7 @@ class StreamingService {
     try {
       const streamPath = session?.streamPath;
       if (!streamPath) return;
-      const streamKey = streamPath.split('/').filter(Boolean).pop();
+      const { streamKey } = this.extractStreamDetails(streamPath);
       let sessionInfo = this.activeSessions.get(streamKey);
       if (!sessionInfo) return;
 
@@ -332,7 +349,7 @@ class StreamingService {
         return;
       }
 
-      const streamKey = streamPath.split('/').filter(Boolean).pop();
+      const { streamKey } = this.extractStreamDetails(streamPath);
       if (!streamKey) {
         session?.close?.();
         return;
@@ -404,7 +421,7 @@ class StreamingService {
     try {
       const streamPath = session?.streamPath;
       if (!streamPath) return;
-      const streamKey = streamPath.split('/').filter(Boolean).pop();
+      const { streamKey } = this.extractStreamDetails(streamPath);
       if (!streamKey) return;
 
       let sessionInfo = this.activeSessions.get(streamKey);
@@ -439,7 +456,7 @@ class StreamingService {
     try {
       const streamPath = session?.streamPath;
       if (!streamPath) return;
-      const streamKey = streamPath.split('/').filter(Boolean).pop();
+      const { streamKey } = this.extractStreamDetails(streamPath);
       if (!streamKey) return;
 
       const sessionInfo = this.activeSessions.get(streamKey);
@@ -695,6 +712,8 @@ class StreamingService {
         id: info.sessionId ?? info.id ?? info.streamKey,
         sessionId: info.sessionId ?? null,
         streamKey: info.streamKey,
+        appName: info.appName || null,
+        streamPath: info.streamPath || null,
         status: info.status ?? 'live',
         startedAt: info.startTime,
         bytesStreamed: info.bytesStreamed ?? 0n,
@@ -724,6 +743,8 @@ class StreamingService {
         return {
           sessionId: ensured.sessionId ?? null,
           streamKey: ensured.streamKey,
+          appName: ensured.appName || null,
+          streamPath: ensured.streamPath || null,
           status: ensured.status ?? 'live',
           startedAt: ensured.startTime ?? null,
           bytesStreamed: (ensured.bytesStreamed ?? 0n).toString(),

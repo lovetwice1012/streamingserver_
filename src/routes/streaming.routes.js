@@ -89,16 +89,20 @@ router.get('/info', authenticate, async (req, res) => {
     const ingestUrl = `${ingestBase}/live`;
     const ingestFullUrl = `${ingestUrl}/${streamKey}`;
 
-    const hlsUrl = `${playbackBase}/live/${streamKey}/index.m3u8`;
-    const flvUrl = `${playbackBase}/live/${streamKey}.flv`;
-
     const rtspPath = rtspService.getLivePlaybackPath(streamKey);
     const rtspUrl = `${rtspBase}${rtspPath}`;
 
+    const session = await streamingService.getSessionForUser(user.id);
+
+    const fallbackAppName = 'live';
+    const activeAppName = session ? session.appName : fallbackAppName;
+    const sanitizedActiveAppName = (activeAppName || '').toString().replace(/^\/+|\/+$/g, '');
+    const playbackStreamPath = `${sanitizedActiveAppName ? `/${sanitizedActiveAppName}` : ''}/${streamKey}`;
+    const hlsUrl = `${playbackBase}${playbackStreamPath}/index.m3u8`.replace(/([^:]\/)\/+/g, '$1');
+    const flvUrl = `${playbackBase}${playbackStreamPath}.flv`.replace(/([^:]\/)\/+/g, '$1');
+
     const quota = await quotaService.getQuotaStatus(user.id);
     const quotaPayload = quotaService.formatQuotaResponse(quota);
-
-    const session = await streamingService.getSessionForUser(user.id);
 
     res.json({
       success: true,
@@ -125,6 +129,8 @@ router.get('/info', authenticate, async (req, res) => {
           port: Number(rtspPort),
           path: rtspPath
         },
+        streamPath: playbackStreamPath,
+        activeAppName: session ? (session.appName || null) : null,
         host: playbackHost,
         protocol: playbackProtocol,
         port: Number(playbackPort)
