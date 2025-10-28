@@ -116,16 +116,46 @@ router.get('/info', authenticate, async (req, res) => {
       : null;
 
     const fallbackAppName = resolveDefaultAppName();
+    const sanitizedFallbackAppName = sanitizePathSegment(fallbackAppName);
     const activeAppName = (
       session && typeof session.appName === 'string' && session.appName.trim().length > 0
     )
       ? session.appName
       : fallbackAppName;
     const sanitizedActiveAppName = sanitizePathSegment(activeAppName);
-    const fallbackStreamPathRaw = `${sanitizedActiveAppName ? `/${sanitizedActiveAppName}` : ''}/${streamKey || ''}`;
-    const fallbackStreamPathNormalized = normalizePlaybackPath(fallbackStreamPathRaw);
-    const fallbackStreamPath = fallbackStreamPathNormalized || (streamKey ? `/${streamKey}` : '/');
-    const playbackStreamPath = normalizedSessionPath || fallbackStreamPath;
+    const streamKeySegment = sanitizePathSegment(streamKey);
+    const expectedAppSegment = sanitizedActiveAppName || sanitizedFallbackAppName || '';
+
+    const buildPlaybackPath = (segments) => {
+      const filtered = segments.filter(Boolean);
+      if (filtered.length === 0) {
+        return '';
+      }
+      return normalizePlaybackPath(`/${filtered.join('/')}`);
+    };
+
+    const sessionPathSegments = normalizedSessionPath
+      ? normalizedSessionPath.split('/').filter(Boolean)
+      : [];
+
+    const missingAppSegment = expectedAppSegment
+      && (sessionPathSegments.length === 0 || sessionPathSegments[0] === streamKeySegment);
+    if (missingAppSegment) {
+      sessionPathSegments.unshift(expectedAppSegment);
+    }
+
+    if (streamKeySegment) {
+      const lastSegment = sessionPathSegments[sessionPathSegments.length - 1];
+      if (lastSegment !== streamKeySegment) {
+        sessionPathSegments.push(streamKeySegment);
+      }
+    }
+
+    const correctedSessionPath = buildPlaybackPath(sessionPathSegments);
+    const fallbackStreamPath =
+      buildPlaybackPath([expectedAppSegment, streamKeySegment]) ||
+      (streamKeySegment ? buildPlaybackPath([streamKeySegment]) : '');
+    const playbackStreamPath = correctedSessionPath || fallbackStreamPath || '/';
     const hlsUrl = `${playbackBase}${playbackStreamPath}/index.m3u8`.replace(/([^:]\/)\/+/g, '$1');
     const flvUrl = `${playbackBase}${playbackStreamPath}.flv`.replace(/([^:]\/)\/+/g, '$1');
 
