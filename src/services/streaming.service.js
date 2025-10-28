@@ -148,23 +148,67 @@ class StreamingService {
   setupEventHandlers() {
     const self = this;
 
+    const resolveNativeSession = (id) => {
+      if (!id || !self.nms || typeof self.nms.getSession !== 'function') {
+        return null;
+      }
+      try {
+        return self.nms.getSession(id) || null;
+      } catch (err) {
+        console.debug('[Stream] Failed to resolve session for id:', id, err?.message || err);
+        return null;
+      }
+    };
+
+    const ensureClose = (session) => {
+      if (!session || typeof session !== 'object') {
+        return session;
+      }
+      if (typeof session.close === 'function') {
+        return session;
+      }
+      session.close = () => {
+        try {
+          if (typeof session.stop === 'function') {
+            session.stop();
+          } else if (typeof session.reject === 'function') {
+            session.reject();
+          } else if (session.id) {
+            const native = resolveNativeSession(session.id);
+            native?.stop?.();
+            native?.reject?.();
+          }
+        } catch (error) {
+          console.error('[Stream] Failed to close session gracefully:', error);
+        }
+      };
+      return session;
+    };
+
     const normalize = function(args) {
       // args can be (sessionObject) OR (id, StreamPath, args)
       if (args.length === 1 && typeof args[0] === 'object' && args[0] !== null) {
-        return args[0];
+        const sessionObject = ensureClose(args[0]);
+        if (!sessionObject.streamPath && args[1]) {
+          sessionObject.streamPath = args[1];
+        }
+        return sessionObject;
       }
+
       const id = args[0];
       const StreamPath = args[1];
-      return {
-        id,
-        streamPath: StreamPath,
-        // close fallback: try session.close if available later
-        close: () => {
-          try {
-            // no-op fallback
-          } catch (e) {}
+      const nativeSession = resolveNativeSession(id);
+      if (nativeSession) {
+        if (!nativeSession.streamPath) {
+          nativeSession.streamPath = StreamPath;
         }
-      };
+        return ensureClose(nativeSession);
+      }
+
+      return ensureClose({
+        id,
+        streamPath: StreamPath
+      });
     };
 
     this.nms.on('prePublish', async (...args) => {
@@ -348,8 +392,17 @@ class StreamingService {
       const username = user?.username || streamKey;
 
       // take latest bytes if available on stored session object
-      if (sessionInfo.session && sessionInfo.session.inBytes !== undefined) {
-        sessionInfo.bytesStreamed = BigInt(sessionInfo.session.inBytes);
+      let publishSession = sessionInfo.session;
+      if (!publishSession || publishSession.inBytes === undefined) {
+        const native = this.getNodeMediaSession(sessionInfo.id || session?.id);
+        if (native) {
+          publishSession = native;
+          sessionInfo.session = native;
+        }
+      }
+
+      if (publishSession && publishSession.inBytes !== undefined) {
+        sessionInfo.bytesStreamed = BigInt(publishSession.inBytes);
       }
 
       if (sessionInfo.quotaInterval) {
@@ -509,6 +562,7 @@ class StreamingService {
       sessionInfo.streamPath = sessionInfo.streamPath || streamPath || sessionInfo.streamPath;
 
       sessionInfo.viewerSessions.set(session.id, {
+        id: session.id,
         session,
         lastOutBytes: BigInt(session.outBytes ?? 0)
       });
@@ -544,6 +598,18 @@ class StreamingService {
     }
   }
 
+  getNodeMediaSession(id) {
+    if (!id || !this.nms || typeof this.nms.getSession !== 'function') {
+      return null;
+    }
+    try {
+      return this.nms.getSession(id) || null;
+    } catch (error) {
+      console.debug('[Stream] Failed to acquire NodeMedia session:', error?.message || error);
+      return null;
+    }
+  }
+
   startQuotaMonitoring(streamKey) {
     const sessionInfo = this.activeSessions.get(streamKey);
     if (!sessionInfo) return;
@@ -572,7 +638,16 @@ class StreamingService {
   }
 
   async processStreamingUsage(sessionInfo) {
-    const session = sessionInfo.session;
+    let session = sessionInfo.session;
+    if (!session || session.inBytes === undefined) {
+      const native = this.getNodeMediaSession(sessionInfo.id || session?.id);
+      if (native) {
+        session = native;
+        sessionInfo.session = native;
+        sessionInfo.id = native.id ?? sessionInfo.id;
+      }
+    }
+
     if (!session) {
       return { bytesAdded: 0n, quota: null };
     }
@@ -660,7 +735,16 @@ class StreamingService {
     let totalIncrement = 0n;
 
     for (const viewer of targetedViewers) {
-      const currentOut = BigInt(viewer.session?.outBytes ?? viewer.lastOutBytes ?? 0n);
+      let viewerSession = viewer.session;
+      if (!viewerSession || viewerSession.outBytes === undefined) {
+        const native = this.getNodeMediaSession(viewer.id || viewerSession?.id);
+        if (native) {
+          viewerSession = native;
+          viewer.session = native;
+        }
+      }
+
+      const currentOut = BigInt(viewerSession?.outBytes ?? viewer.lastOutBytes ?? 0n);
       const previousOut = viewer.lastOutBytes ?? 0n;
       const delta = currentOut - previousOut;
       if (delta > 0n) {
