@@ -3,12 +3,18 @@ const authService = require('../services/auth.service');
 const authenticate = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
+    let token = null;
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7);
+    } else if (req.query && typeof req.query.token === 'string' && req.query.token.length > 0) {
+      token = req.query.token;
+    }
+
+    if (!token) {
       return res.status(401).json({ error: 'No token provided' });
     }
 
-    const token = authHeader.substring(7);
     const decoded = authService.verifyToken(token);
 
     req.user = decoded;

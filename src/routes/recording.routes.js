@@ -1,6 +1,7 @@
 const express = require('express');
 const authMiddleware = require('../middleware/auth.middleware');
 const prisma = require('../db');
+const recordingService = require('../services/recording.service');
 
 const router = express.Router();
 
@@ -91,10 +92,17 @@ router.get('/:id/play', authMiddleware, async (req, res) => {
       return res.status(404).json({ error: 'Recording not found' });
     }
 
-    // Redirect to S3 URL
-    res.redirect(recording.s3Url);
+    await recordingService.streamRecordingToResponse(recording, req, res, {
+      viewerId: req.user.id,
+      enforceQuota: true
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('[Recording] Play error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to stream recording' });
+    } else {
+      res.end();
+    }
   }
 });
 

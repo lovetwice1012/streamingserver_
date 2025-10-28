@@ -49,6 +49,18 @@ class DiscordService {
   async sendRecordingSaved(data) {
     const durationStr = this.formatDuration(data.duration);
     const sizeStr = this.formatBytes(data.size);
+    const isLocal = data.storageProvider === 'local' || (typeof data.s3Url === 'string' && data.s3Url.startsWith('local:'));
+    const storageField = isLocal
+      ? {
+          name: '保管場所',
+          value: 'ローカルストレージ（ダッシュボードから再生可能）',
+          inline: false
+        }
+      : {
+          name: 'S3 URL',
+          value: data.s3Url,
+          inline: false
+        };
 
     const embed = {
       title: '💾 録画保存完了',
@@ -58,7 +70,7 @@ class DiscordService {
         { name: 'ファイル名', value: data.filename, inline: false },
         { name: '録画時間', value: durationStr, inline: true },
         { name: 'ファイルサイズ', value: sizeStr, inline: true },
-        { name: 'S3 URL', value: data.s3Url, inline: false }
+        storageField
       ],
       timestamp: new Date().toISOString()
     };

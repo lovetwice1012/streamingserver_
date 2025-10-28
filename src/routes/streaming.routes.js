@@ -95,7 +95,11 @@ router.get('/info', authenticate, async (req, res) => {
     const session = await streamingService.getSessionForUser(user.id);
 
     const fallbackAppName = 'live';
-    const activeAppName = session ? session.appName : fallbackAppName;
+    const activeAppName = (
+      session && typeof session.appName === 'string' && session.appName.trim().length > 0
+    )
+      ? session.appName
+      : fallbackAppName;
     const sanitizedActiveAppName = (activeAppName || '').toString().replace(/^\/+|\/+$/g, '');
     const playbackStreamPath = `${sanitizedActiveAppName ? `/${sanitizedActiveAppName}` : ''}/${streamKey}`;
     const hlsUrl = `${playbackBase}${playbackStreamPath}/index.m3u8`.replace(/([^:]\/)\/+/g, '$1');

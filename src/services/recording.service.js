@@ -1,4 +1,4 @@
-const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
 const { Upload } = require('@aws-sdk/lib-storage');
 const ffmpeg = require('fluent-ffmpeg');
 const fs = require('fs');
@@ -222,9 +222,21 @@ class RecordingService {
         }
       }
 
-      // Upload to S3
-      const s3Key = `recordings/${recording.user.id}/${recording.filename}`;
-      const s3Url = await this.uploadToS3(recording.filePath, s3Key);
+      const userPlan = (recording.user?.plan || 'FREE').toUpperCase();
+      const useWasabiStorage = userPlan !== 'FREE';
+      let s3Key;
+      let s3Url = '';
+
+      if (useWasabiStorage) {
+        // Upload to Wasabi (S3 compatible)
+        s3Key = `recordings/${recording.user.id}/${recording.filename}`;
+        s3Url = await this.uploadToS3(recording.filePath, s3Key);
+      } else {
+        // Free plan keeps recording on local storage
+        s3Key = `local:${recording.filename}`;
+        s3Url = s3Key;
+        console.log('[Recording] Stored locally for free plan:', recording.filePath);
+      }
 
       // Update quota
       await quotaService.updateRecordingQuota(recording.user.id, fileSizeBytes);
@@ -246,8 +258,10 @@ class RecordingService {
         }
       });
 
-      // Delete local file
-      fs.unlinkSync(recording.filePath);
+      // Delete local file for Wasabi uploads only
+      if (useWasabiStorage && fs.existsSync(recording.filePath)) {
+        fs.unlinkSync(recording.filePath);
+      }
 
       // Discord notification
       await discordService.sendRecordingSaved({
@@ -255,7 +269,8 @@ class RecordingService {
         filename: recording.filename,
         size: fileSizeBytes,
         duration,
-        s3Url
+        s3Url,
+        storageProvider: useWasabiStorage ? 'wasabi' : 'local'
       });
 
       console.log(`[Recording] Saved to S3: ${s3Url}`);
@@ -291,15 +306,7 @@ class RecordingService {
 
       await upload.done();
 
-      const s3Url = `${process.env.WASABI_ENDPOINT}/${process.env.WASABI_BUCKET}/${s3Key}`;
-      
-      // ローカルファイルを削除（クラウドストレージに移行）
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-        console.log('[Recording] Local file deleted after S3 upload:', filePath);
-      }
-      
-      return s3Url;
+      return `${process.env.WASABI_ENDPOINT}/${process.env.WASABI_BUCKET}/${s3Key}`;
 
     } catch (error) {
       console.error('[Recording] S3 upload error:', error);
@@ -309,6 +316,22 @@ class RecordingService {
 
   async deleteFromS3(s3Key) {
     try {
+      if (!s3Key) {
+        return;
+      }
+
+      if (s3Key.startsWith('local:')) {
+        const filename = s3Key.replace(/^local:/, '');
+        const safeName = path.basename(filename);
+        const recordingDir = this.getRecordingDirectory();
+        const localPath = path.join(recordingDir, safeName);
+        if (fs.existsSync(localPath)) {
+          fs.unlinkSync(localPath);
+          console.log('[Recording] Deleted local recording:', localPath);
+        }
+        return;
+      }
+
       const { DeleteObjectCommand } = require('@aws-sdk/client-s3');
       await this.s3Client.send(new DeleteObjectCommand({
         Bucket: process.env.WASABI_BUCKET,
@@ -317,6 +340,243 @@ class RecordingService {
       console.log(`[Recording] Deleted from S3: ${s3Key}`);
     } catch (error) {
       console.error('[Recording] S3 delete error:', error);
+    }
+  }
+
+  getRecordingDirectory() {
+    const recordingDir = process.env.RECORDING_DIR || './recordings';
+    return path.isAbsolute(recordingDir)
+      ? recordingDir
+      : path.join(process.cwd(), recordingDir);
+  }
+
+  parseRangeHeader(rangeHeader, totalSize) {
+    const size = Number.isFinite(totalSize) ? totalSize : Number(totalSize || 0);
+    if (!Number.isFinite(size) || size < 0) {
+      return null;
+    }
+
+    if (!rangeHeader) {
+      const end = size > 0 ? size - 1 : 0;
+      return {
+        start: 0,
+        end,
+        chunkSize: size > 0 ? size : 0,
+        isPartial: false
+      };
+    }
+
+    if (!rangeHeader.startsWith('bytes=')) {
+      return null;
+    }
+
+    const value = rangeHeader.substring(6).trim();
+    if (!value || value.includes(',')) {
+      return null; // multi-range unsupported
+    }
+
+    const [rawStart, rawEnd] = value.split('-');
+    let start;
+    let end;
+
+    if (!rawStart) {
+      const suffixLength = parseInt(rawEnd, 10);
+      if (!Number.isFinite(suffixLength) || suffixLength <= 0) {
+        return null;
+      }
+      start = size - suffixLength;
+      if (start < 0) {
+        start = 0;
+      }
+      end = size - 1;
+    } else {
+      start = parseInt(rawStart, 10);
+      if (!Number.isFinite(start) || start < 0) {
+        return null;
+      }
+
+      if (!rawEnd) {
+        end = size - 1;
+      } else {
+        end = parseInt(rawEnd, 10);
+        if (!Number.isFinite(end) || end < 0) {
+          return null;
+        }
+      }
+    }
+
+    if (size === 0) {
+      start = 0;
+      end = -1;
+    } else {
+      if (start >= size) {
+        return null;
+      }
+      if (end >= size || end < 0) {
+        end = size - 1;
+      }
+      if (start > end) {
+        return null;
+      }
+    }
+
+    const chunkSize = end >= start ? (end - start + 1) : 0;
+    return {
+      start,
+      end,
+      chunkSize,
+      isPartial: !(start === 0 && end === size - 1)
+    };
+  }
+
+  async streamRecordingToResponse(recording, req, res, options = {}) {
+    try {
+      if (!recording) {
+        res.status(404).json({ error: 'Recording not found' });
+        return;
+      }
+
+      const { viewerId = null, enforceQuota = true } = options;
+
+      let fileSize;
+      if (typeof recording.sizeBytes === 'bigint') {
+        fileSize = Number(recording.sizeBytes);
+      } else if (typeof recording.sizeBytes === 'number') {
+        fileSize = recording.sizeBytes;
+      } else {
+        fileSize = Number(recording.sizeBytes || 0);
+      }
+
+      const isLocal = typeof recording.s3Key === 'string' && recording.s3Key.startsWith('local:');
+      let localPath = null;
+
+      if (isLocal) {
+        const rawName = recording.s3Key.replace(/^local:/, '') || recording.filename;
+        const safeName = path.basename(rawName || recording.filename);
+        localPath = path.join(this.getRecordingDirectory(), safeName);
+        if (!fs.existsSync(localPath)) {
+          res.status(404).json({ error: 'Recording file not found' });
+          return;
+        }
+        try {
+          const stat = fs.statSync(localPath);
+          fileSize = stat.size;
+        } catch (error) {
+          console.error('[Recording] Failed to stat local file:', error);
+          res.status(500).json({ error: 'Failed to access recording file' });
+          return;
+        }
+      }
+
+      if (!Number.isFinite(fileSize) || fileSize < 0) {
+        res.status(500).json({ error: 'Invalid recording size' });
+        return;
+      }
+
+      const rangeInfo = this.parseRangeHeader(req.headers.range || '', fileSize);
+      if (!rangeInfo) {
+        res.status(416).set('Content-Range', `bytes */${fileSize}`);
+        res.end();
+        return;
+      }
+
+      if (enforceQuota && viewerId && rangeInfo.chunkSize > 0) {
+        const quotaResult = await quotaService.checkAndUpdateViewingQuota(viewerId, rangeInfo.chunkSize);
+        if (!quotaResult.allowed) {
+          res.status(403).json({ error: 'Viewing quota exceeded' });
+          return;
+        }
+      }
+
+      const safeFilename = encodeURIComponent(recording.filename || 'recording.mp4').replace(/%20/g, ' ');
+      const statusCode = rangeInfo.isPartial ? 206 : 200;
+
+      res.status(statusCode);
+      res.set({
+        'Content-Type': 'video/mp4',
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'private, max-age=0, must-revalidate',
+        'Content-Disposition': `inline; filename="${safeFilename}"; filename*=UTF-8''${safeFilename}`
+      });
+
+      if (rangeInfo.chunkSize > 0) {
+        res.set('Content-Length', String(rangeInfo.chunkSize));
+      }
+
+      if (rangeInfo.isPartial && fileSize > 0) {
+        res.set('Content-Range', `bytes ${rangeInfo.start}-${rangeInfo.end}/${fileSize}`);
+      }
+
+      if (req.method === 'HEAD' || rangeInfo.chunkSize === 0) {
+        res.end();
+        return;
+      }
+
+      if (isLocal) {
+        const readStream = fs.createReadStream(localPath, {
+          start: Math.max(rangeInfo.start, 0),
+          end: rangeInfo.end >= 0 ? rangeInfo.end : undefined
+        });
+
+        const abort = () => readStream.destroy();
+        req.on('close', abort);
+        readStream.on('error', (error) => {
+          console.error('[Recording] Local stream error:', error);
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Failed to stream recording' });
+          } else {
+            res.destroy(error);
+          }
+        });
+        readStream.pipe(res);
+        return;
+      }
+
+      if (!this.s3Client) {
+        res.status(500).json({ error: 'Storage client not configured' });
+        return;
+      }
+
+      try {
+        const params = {
+          Bucket: process.env.WASABI_BUCKET,
+          Key: recording.s3Key
+        };
+        if (rangeInfo.isPartial && fileSize > 0) {
+          params.Range = `bytes=${rangeInfo.start}-${rangeInfo.end}`;
+        }
+
+        const s3Response = await this.s3Client.send(new GetObjectCommand(params));
+        const bodyStream = s3Response.Body;
+
+        const abort = () => bodyStream?.destroy?.();
+        req.on('close', abort);
+
+        bodyStream.on('error', (error) => {
+          console.error('[Recording] S3 stream error:', error);
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Failed to stream recording' });
+          } else {
+            res.destroy(error);
+          }
+        });
+
+        bodyStream.pipe(res);
+      } catch (error) {
+        console.error('[Recording] S3 get error:', error);
+        if (!res.headersSent) {
+          res.status(500).json({ error: 'Failed to fetch recording from storage' });
+        } else {
+          res.destroy(error);
+        }
+      }
+    } catch (error) {
+      console.error('[Recording] streamRecordingToResponse error:', error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to stream recording' });
+      } else {
+        res.destroy(error);
+      }
     }
   }
 }

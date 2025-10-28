@@ -1,8 +1,11 @@
 const express = require('express');
 const router = express.Router();
+const fs = require('fs');
+const path = require('path');
 const prisma = require('../db');
 const { authenticate } = require('../middleware/auth.middleware');
 const { adminOnly } = require('../middleware/admin.middleware');
+const recordingService = require('../services/recording.service');
 
 let streamingService;
 try {
@@ -218,13 +221,34 @@ router.get('/recordings', authenticate, adminOnly, async (req, res) => {
     try {
       if (prisma && prisma.recording && typeof prisma.recording.findMany === 'function') {
         recordings = await prisma.recording.findMany({
-          orderBy: { createdAt: 'desc' }
+          orderBy: { createdAt: 'desc' },
+          include: {
+            user: {
+              select: {
+                id: true,
+                username: true,
+                plan: true
+              }
+            }
+          }
         });
         // BigInt を数値に変換
-        recordings = recordings.map(r => ({
-          ...r,
-          size: r.size !== undefined ? Number(r.size) : r.size
-        }));
+        recordings = recordings.map(r => {
+          const sizeBytes = r.sizeBytes != null
+            ? Number(r.sizeBytes)
+            : 0;
+
+          return {
+            ...r,
+            sizeBytes,
+            duration: Number(r.duration),
+            user: r.user ? {
+              id: r.user.id,
+              username: r.user.username,
+              plan: r.user.plan
+            } : null
+          };
+        });
       } else {
         // フォールバック: filesystem の /opt/streamingserver/recordings を走査
         const recordingsDir = path.join(__dirname, '../../recordings');
@@ -248,6 +272,29 @@ router.get('/recordings', authenticate, adminOnly, async (req, res) => {
   } catch (error) {
     console.error('[Admin] Get recordings error:', error);
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.get('/recordings/:id/play', authenticate, adminOnly, async (req, res) => {
+  try {
+    const recording = await prisma.recording.findUnique({
+      where: { id: req.params.id }
+    });
+
+    if (!recording) {
+      return res.status(404).json({ error: 'Recording not found' });
+    }
+
+    await recordingService.streamRecordingToResponse(recording, req, res, {
+      enforceQuota: false
+    });
+  } catch (error) {
+    console.error('[Admin] Play recording error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to stream recording' });
+    } else {
+      res.end();
+    }
   }
 });
 

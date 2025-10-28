@@ -1,7 +1,13 @@
 import { useQuery } from '@tanstack/react-query';
 import { Video, User, Play } from 'lucide-react';
 import api from '../../lib/api';
+import toast from 'react-hot-toast';
 import { format } from 'date-fns';
+
+const getApiBaseUrl = () => {
+  const base = import.meta.env.VITE_API_URL || '/api';
+  return base.endsWith('/') ? base.slice(0, -1) : base;
+};
 
 export default function AdminRecordings() {
   const { data, isLoading } = useQuery({
@@ -37,7 +43,14 @@ export default function AdminRecordings() {
   };
 
   const handlePlay = (recording) => {
-    window.open(recording.s3Url, '_blank');
+    const token = localStorage.getItem('token');
+    if (!token) {
+      toast.error('認証情報が見つかりません');
+      return;
+    }
+
+    const playbackUrl = `${getApiBaseUrl()}/admin/recordings/${recording.id}/play?token=${encodeURIComponent(token)}`;
+    window.open(playbackUrl, '_blank', 'noopener');
   };
 
   if (isLoading) {

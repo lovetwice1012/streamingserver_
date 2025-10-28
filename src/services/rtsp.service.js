@@ -1,6 +1,8 @@
 const Stream = require('node-rtsp-stream');
 const { spawn } = require('child_process');
+const path = require('path');
 const prisma = require('../db');
+const recordingService = require('./recording.service');
 
 const DEFAULT_LIVE_PATH = '/live';
 const RESTREAM_PREFIX = 'restream_live_';
@@ -193,9 +195,17 @@ class RTSPService {
         throw new Error('Recording not found');
       }
 
+      let streamSource = recording.s3Url;
+      if (recording.s3Key && recording.s3Key.startsWith('local:')) {
+        const safeName = path.basename(
+          recording.s3Key.replace(/^local:/, '') || recording.filename
+        );
+        streamSource = path.join(recordingService.getRecordingDirectory(), safeName);
+      }
+
       const stream = new Stream({
         name: `vod_${recordingId}`,
-        streamUrl: recording.s3Url,
+        streamUrl: streamSource,
         wsPort: port,
         ffmpegOptions: {
           '-stats': '',
