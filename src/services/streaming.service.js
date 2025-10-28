@@ -8,11 +8,15 @@ const discordService = require('./discord.service');
 const websocketService = require('./websocket.service');
 const rtspService = require('./rtsp.service');
 const prisma = require('../db');
+const { ensureFFmpegAvailable } = require('../utils/ffmpeg');
+
+const DEFAULT_FFMPEG_BINARY = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
 
 class StreamingService {
   constructor() {
     this.activeSessions = new Map(); // streamKey -> { user, startTime, bytesStreamed, bytesDelivered, viewerSessions, session, ... }
     this.nms = null;
+    this.ffmpegPath = null;
   }
 
   extractStreamDetails(streamPath) {
@@ -32,6 +36,8 @@ class StreamingService {
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     });
 
+    this.ffmpegPath = ensureFFmpegAvailable({ logger: console }) || DEFAULT_FFMPEG_BINARY;
+
     const config = {
       logType: 3,
       rtmp: {
@@ -47,7 +53,7 @@ class StreamingService {
         allow_origin: '*'
       },
       trans: {
-        ffmpeg: process.env.FFMPEG_PATH || '/usr/bin/ffmpeg',
+        ffmpeg: this.ffmpegPath,
         tasks: [
           {
             app: 'live',

@@ -3,6 +3,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const prisma = require('../db');
 const recordingService = require('./recording.service');
+const { resolveFFmpegPath } = require('../utils/ffmpeg');
 
 const DEFAULT_LIVE_PATH = '/live';
 const RESTREAM_PREFIX = 'restream_live_';
@@ -15,6 +16,7 @@ class RTSPService {
   constructor() {
     this.activeStreams = new Map(); // legacy websocket proxies
     this.liveRestreams = new Map(); // restreamId -> { process, streamKey, inputUrl, outputUrl, startedAt }
+    this.ffmpegPath = resolveFFmpegPath({ logger: console });
   }
 
   getLivePlaybackPath(streamKey) {
@@ -66,7 +68,11 @@ class RTSPService {
       return existing;
     }
 
-    const ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg';
+    const ffmpegPath = this.getFfmpegPath();
+    if (!ffmpegPath) {
+      console.error(`[RTSP] FFmpeg is not available, cannot start restream for ${streamKey}`);
+      return null;
+    }
     const sanitizedAppName = (options.appName || '').toString().replace(/^\/+|\/+$/g, '');
     const inputUrl = this.buildIngestUrl(streamKey, sanitizedAppName);
     const outputUrl = this.buildMediaMtxPublishUrl(streamKey);
@@ -119,6 +125,13 @@ class RTSPService {
 
     this.liveRestreams.set(restreamId, restreamInfo);
     return restreamInfo;
+  }
+
+  getFfmpegPath() {
+    if (!this.ffmpegPath) {
+      this.ffmpegPath = resolveFFmpegPath({ logger: console });
+    }
+    return this.ffmpegPath;
   }
 
   resolveRestreamId(streamKeyOrId) {

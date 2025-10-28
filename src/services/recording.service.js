@@ -6,6 +6,7 @@ const path = require('path');
 const prisma = require('../db');
 const quotaService = require('./quota.service');
 const discordService = require('./discord.service');
+const { ensureFFmpegAvailable, resolveFFmpegPath } = require('../utils/ffmpeg');
 
 class RecordingService {
   constructor() {
@@ -18,10 +19,39 @@ class RecordingService {
         secretAccessKey: process.env.WASABI_SECRET_ACCESS_KEY
       }
     });
+    this.ffmpegPath = ensureFFmpegAvailable({ logger: console });
+    if (this.ffmpegPath) {
+      try {
+        ffmpeg.setFfmpegPath(this.ffmpegPath);
+      } catch (error) {
+        console.error('[Recording] Failed to set FFmpeg path:', error);
+      }
+    }
+  }
+
+  getFfmpegPath() {
+    if (!this.ffmpegPath) {
+      const resolved = resolveFFmpegPath({ logger: console });
+      if (resolved) {
+        this.ffmpegPath = resolved;
+        try {
+          ffmpeg.setFfmpegPath(resolved);
+        } catch (error) {
+          console.error('[Recording] Failed to apply FFmpeg path:', error);
+        }
+      }
+    }
+    return this.ffmpegPath;
   }
 
   async startRecording(streamKey, user, options = {}) {
     try {
+      const ffmpegPath = this.getFfmpegPath();
+      if (!ffmpegPath) {
+        console.error('[Recording] FFmpeg is not available. Skipping recording start.');
+        return;
+      }
+
       const recordingDir = process.env.RECORDING_DIR || './recordings';
       if (!fs.existsSync(recordingDir)) {
         fs.mkdirSync(recordingDir, { recursive: true });
