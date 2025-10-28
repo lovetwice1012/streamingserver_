@@ -122,9 +122,13 @@ router.get('/info', authenticate, async (req, res) => {
     )
       ? session.appName
       : fallbackAppName;
-    const sanitizedActiveAppName = sanitizePathSegment(activeAppName);
+    let sanitizedActiveAppName = sanitizePathSegment(activeAppName);
     const streamKeySegment = sanitizePathSegment(streamKey);
+    if (sanitizedActiveAppName && sanitizedActiveAppName === streamKeySegment) {
+      sanitizedActiveAppName = '';
+    }
     const expectedAppSegment = sanitizedActiveAppName || sanitizedFallbackAppName || '';
+    const resolvedAppName = expectedAppSegment || null;
 
     const buildPlaybackPath = (segments) => {
       const filtered = segments.filter(Boolean);
@@ -134,27 +138,36 @@ router.get('/info', authenticate, async (req, res) => {
       return normalizePlaybackPath(`/${filtered.join('/')}`);
     };
 
-    const sessionPathSegments = normalizedSessionPath
+    const baseSegments = normalizedSessionPath
       ? normalizedSessionPath.split('/').filter(Boolean)
       : [];
+    const sessionSegments = [];
 
-    const missingAppSegment = expectedAppSegment
-      && (sessionPathSegments.length === 0 || sessionPathSegments[0] === streamKeySegment);
-    if (missingAppSegment) {
-      sessionPathSegments.unshift(expectedAppSegment);
+    if (expectedAppSegment) {
+      sessionSegments.push(expectedAppSegment);
+    }
+
+    for (const segment of baseSegments) {
+      if (!segment) continue;
+      if (expectedAppSegment && segment === expectedAppSegment) continue;
+      if (streamKeySegment && segment === streamKeySegment) continue;
+      sessionSegments.push(segment);
     }
 
     if (streamKeySegment) {
-      const lastSegment = sessionPathSegments[sessionPathSegments.length - 1];
-      if (lastSegment !== streamKeySegment) {
-        sessionPathSegments.push(streamKeySegment);
-      }
+      sessionSegments.push(streamKeySegment);
     }
 
-    const correctedSessionPath = buildPlaybackPath(sessionPathSegments);
-    const fallbackStreamPath =
-      buildPlaybackPath([expectedAppSegment, streamKeySegment]) ||
-      (streamKeySegment ? buildPlaybackPath([streamKeySegment]) : '');
+    const correctedSessionPath = buildPlaybackPath(sessionSegments);
+
+    const fallbackSegments = [];
+    if (expectedAppSegment) {
+      fallbackSegments.push(expectedAppSegment);
+    }
+    if (streamKeySegment) {
+      fallbackSegments.push(streamKeySegment);
+    }
+    const fallbackStreamPath = buildPlaybackPath(fallbackSegments);
     const playbackStreamPath = correctedSessionPath || fallbackStreamPath || '/';
     const hlsUrl = `${playbackBase}${playbackStreamPath}/index.m3u8`.replace(/([^:]\/)\/+/g, '$1');
     const flvUrl = `${playbackBase}${playbackStreamPath}.flv`.replace(/([^:]\/)\/+/g, '$1');
@@ -188,7 +201,7 @@ router.get('/info', authenticate, async (req, res) => {
           path: rtspPath
         },
         streamPath: playbackStreamPath,
-        activeAppName: session ? (session.appName || null) : null,
+        activeAppName: resolvedAppName,
         host: playbackHost,
         protocol: playbackProtocol,
         port: Number(playbackPort)
