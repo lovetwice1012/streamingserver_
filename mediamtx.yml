@@ -14,7 +14,7 @@ rtpAddress: :8000
 rtcpAddress: :8001
 
 # RTMP configuration
-rtmpAddress: 0.0.0.0:1935
+rtmpAddress: 0.0.0.0:1936
 rtmpEncryption: "no"
 
 # HLS configuration
@@ -50,7 +50,7 @@ paths:
     # Recording (optional)
     record: no
     recordPath: ./recordings/%path/%Y-%m-%d_%H-%M-%S-%f
-    recordFormat: mp4
+    recordFormat: fmp4
     recordPartDuration: 1s
     recordSegmentDuration: 1h
     

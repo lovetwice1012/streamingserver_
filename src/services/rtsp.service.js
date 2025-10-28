@@ -72,9 +72,6 @@ class RTSPService {
     const args = [
       '-hide_banner',
       '-loglevel', process.env.FFMPEG_LOGLEVEL || 'warning',
-      '-reconnect', '1',
-      '-reconnect_streamed', '1',
-      '-reconnect_delay_max', '2',
       '-i', inputUrl,
       '-c', 'copy',
       '-f', 'flv',
