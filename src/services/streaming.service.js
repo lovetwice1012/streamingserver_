@@ -19,14 +19,85 @@ class StreamingService {
     this.ffmpegPath = null;
   }
 
-  extractStreamDetails(streamPath) {
-    const parts = (streamPath || '').split('/').filter(Boolean);
-    if (parts.length === 0) {
-      return { streamKey: null, appName: null };
+  extractStreamDetails(source) {
+    let streamKey = null;
+    let appName = null;
+    let rawPath = null;
+
+    if (source && typeof source === 'object') {
+      const session = source;
+      streamKey = session.streamName ?? session.streamKey ?? null;
+      appName = session.streamApp ?? session.appName ?? null;
+      rawPath = session.streamPath ?? session.publishStreamPath ?? session.playStreamPath ?? null;
+
+      if (!rawPath && (appName || streamKey)) {
+        const prefix = appName ? `/${appName}` : '';
+        rawPath = `${prefix}/${streamKey ?? ''}`;
+      }
+    } else {
+      rawPath = source;
     }
-    const streamKey = parts.pop();
-    const appName = parts.length > 0 ? parts.join('/') : null;
-    return { streamKey, appName };
+
+    if (typeof rawPath === 'string' && rawPath.length > 0) {
+      const parts = rawPath.split('/').filter(Boolean);
+      if (parts.length > 0) {
+        const lastSegment = parts[parts.length - 1];
+        if (!streamKey) {
+          streamKey = lastSegment || null;
+          parts.pop();
+        } else if (streamKey === lastSegment) {
+          parts.pop();
+        }
+        if (!appName && parts.length > 0) {
+          appName = parts.join('/');
+        }
+      }
+    }
+
+    if (typeof streamKey === 'string') {
+      streamKey = streamKey.replace(/^\/+|\/+$/g, '') || null;
+    }
+    if (typeof appName === 'string') {
+      appName = appName.replace(/^\/+|\/+$/g, '') || null;
+    }
+
+    const streamPath = this.normalizeStreamPath(appName, streamKey, rawPath);
+
+    return { streamKey, appName, streamPath };
+  }
+
+  normalizeStreamPath(appName, streamKey, rawPath) {
+    let candidate = null;
+
+    if (typeof rawPath === 'string' && rawPath.length > 0) {
+      candidate = rawPath;
+    } else if (streamKey) {
+      const prefix = appName ? `/${appName}` : '';
+      candidate = `${prefix}/${streamKey}`;
+    }
+
+    if (!candidate) {
+      return null;
+    }
+
+    const withLeadingSlash = candidate.startsWith('/') ? candidate : `/${candidate}`;
+    const normalized = withLeadingSlash.replace(/\/+/g, '/');
+    if (normalized.length > 1 && normalized.endsWith('/')) {
+      return normalized.slice(0, -1);
+    }
+    return normalized;
+  }
+
+  getDefaultAppName() {
+    const raw = process.env.STREAM_DEFAULT_APP_NAME;
+    if (raw === undefined || raw === null) {
+      return 'live';
+    }
+    const trimmed = raw.toString().trim();
+    if (trimmed.length === 0) {
+      return '';
+    }
+    return trimmed.replace(/^\/+|\/+$/g, '');
   }
 
   init() {
@@ -129,17 +200,9 @@ class StreamingService {
 
   async handlePrePublish(session) {
     try {
-      const streamPath = session?.streamPath;
-      if (!streamPath) {
-        console.error('[Stream] Pre-publish error: missing stream path');
-        session?.close?.();
-        return;
-      }
-
-      const { streamKey } = this.extractStreamDetails(streamPath);
-      if (!streamKey) return;
-      if (!streamKey) {
-        console.error('[Stream] Pre-publish error: unable to determine stream key');
+      const { streamKey, appName, streamPath } = this.extractStreamDetails(session);
+      if (!streamKey || !streamPath) {
+        console.error('[Stream] Pre-publish error: unable to determine stream key or path');
         session?.close?.();
         return;
       }
@@ -181,7 +244,9 @@ class StreamingService {
         viewerSessions: new Map(),
         viewerQuotaExceeded: false,
         status: 'live',
-        streamKey
+        streamKey,
+        appName: appName || null,
+        streamPath
       });
 
     } catch (error) {
@@ -192,10 +257,8 @@ class StreamingService {
 
   async handlePostPublish(session) {
     try {
-      const streamPath = session?.streamPath;
-      if (!streamPath) { session?.close?.(); return; }
-      const { streamKey, appName } = this.extractStreamDetails(streamPath);
-      if (!streamKey) { session?.close?.(); return; }
+      const { streamKey, appName, streamPath } = this.extractStreamDetails(session);
+      if (!streamKey || !streamPath) { session?.close?.(); return; }
 
       let sessionInfo = this.activeSessions.get(streamKey);
 
@@ -226,7 +289,7 @@ class StreamingService {
       sessionInfo.session = session;
       sessionInfo.id = session.id ?? sessionInfo.id;
       sessionInfo.streamKey = streamKey;
-      sessionInfo.appName = appName || null;
+      sessionInfo.appName = sessionInfo.appName || appName || null;
       sessionInfo.streamPath = streamPath;
 
       sessionInfo = await this.ensureSessionUser(sessionInfo, streamKey);
@@ -247,14 +310,14 @@ class StreamingService {
 
       // start recording if available (recordingService should handle missing implementation)
       if (recordingService?.startRecording) {
-        await recordingService.startRecording(streamKey, sessionInfo.user, { appName });
+        await recordingService.startRecording(streamKey, sessionInfo.user, { appName: sessionInfo.appName });
       }
 
       // start quota monitoring
       this.startQuotaMonitoring(streamKey);
 
       try {
-        const restream = rtspService.startLiveRestream(streamKey, { appName });
+        const restream = rtspService.startLiveRestream(streamKey, { appName: sessionInfo.appName });
         if (restream?.outputUrl) {
           console.log(`[Stream] RTSP restream publishing to ${restream.outputUrl}`);
         }
@@ -275,9 +338,8 @@ class StreamingService {
 
   async handleDonePublish(session) {
     try {
-      const streamPath = session?.streamPath;
-      if (!streamPath) return;
-      const { streamKey } = this.extractStreamDetails(streamPath);
+      const { streamKey } = this.extractStreamDetails(session);
+      if (!streamKey) return;
       let sessionInfo = this.activeSessions.get(streamKey);
       if (!sessionInfo) return;
 
@@ -349,13 +411,7 @@ class StreamingService {
 
   async handlePrePlay(session) {
     try {
-      const streamPath = session?.streamPath;
-      if (!streamPath) {
-        session?.close?.();
-        return;
-      }
-
-      const { streamKey } = this.extractStreamDetails(streamPath);
+      const { streamKey, appName, streamPath } = this.extractStreamDetails(session);
       if (!streamKey) {
         session?.close?.();
         return;
@@ -383,9 +439,14 @@ class StreamingService {
           viewerSessions: new Map(),
           viewerQuotaExceeded: false,
           status: 'live',
-          streamKey
+          streamKey,
+          appName: appName || null,
+          streamPath
         };
         this.activeSessions.set(streamKey, sessionInfo);
+      } else {
+        sessionInfo.appName = sessionInfo.appName || appName || null;
+        sessionInfo.streamPath = sessionInfo.streamPath || streamPath || sessionInfo.streamPath;
       }
 
       if (sessionInfo.viewerQuotaExceeded) {
@@ -425,9 +486,7 @@ class StreamingService {
 
   async handlePostPlay(session) {
     try {
-      const streamPath = session?.streamPath;
-      if (!streamPath) return;
-      const { streamKey } = this.extractStreamDetails(streamPath);
+      const { streamKey, appName, streamPath } = this.extractStreamDetails(session);
       if (!streamKey) return;
 
       let sessionInfo = this.activeSessions.get(streamKey);
@@ -446,6 +505,9 @@ class StreamingService {
         sessionInfo.viewerSessions = new Map();
       }
 
+      sessionInfo.appName = sessionInfo.appName || appName || null;
+      sessionInfo.streamPath = sessionInfo.streamPath || streamPath || sessionInfo.streamPath;
+
       sessionInfo.viewerSessions.set(session.id, {
         session,
         lastOutBytes: BigInt(session.outBytes ?? 0)
@@ -460,9 +522,7 @@ class StreamingService {
 
   async handleDonePlay(session) {
     try {
-      const streamPath = session?.streamPath;
-      if (!streamPath) return;
-      const { streamKey } = this.extractStreamDetails(streamPath);
+      const { streamKey } = this.extractStreamDetails(session);
       if (!streamKey) return;
 
       const sessionInfo = this.activeSessions.get(streamKey);
@@ -700,6 +760,8 @@ class StreamingService {
 
       sessionInfo.user = user;
       sessionInfo.streamKey = key;
+      sessionInfo.appName = sessionInfo.appName ? sessionInfo.appName.replace(/^\/+|\/+$/g, '') || null : sessionInfo.appName ?? null;
+      sessionInfo.streamPath = this.normalizeStreamPath(sessionInfo.appName, key, sessionInfo.streamPath);
       if (!sessionInfo.viewerSessions) {
         sessionInfo.viewerSessions = new Map();
       }
@@ -758,6 +820,28 @@ class StreamingService {
           viewerCount
         };
       }
+    }
+
+    const fallbackSession = await prisma.streamSession.findFirst({
+      where: { userId, status: 'live' },
+      orderBy: { startedAt: 'desc' }
+    });
+
+    if (fallbackSession) {
+      const defaultApp = this.getDefaultAppName();
+      const normalizedApp = defaultApp && defaultApp.length > 0 ? defaultApp : null;
+      const streamPath = this.normalizeStreamPath(normalizedApp, fallbackSession.streamKey, fallbackSession.streamPath);
+      return {
+        sessionId: fallbackSession.id,
+        streamKey: fallbackSession.streamKey,
+        appName: normalizedApp,
+        streamPath,
+        status: fallbackSession.status ?? 'live',
+        startedAt: fallbackSession.startedAt ?? null,
+        bytesStreamed: (fallbackSession.bytesStreamed ?? 0n).toString(),
+        bytesDelivered: (fallbackSession.bytesDelivered ?? 0n).toString(),
+        viewerCount: 0
+      };
     }
 
     return null;

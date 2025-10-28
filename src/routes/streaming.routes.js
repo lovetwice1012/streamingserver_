@@ -8,6 +8,20 @@ const rtspService = require('../services/rtsp.service');
 const router = express.Router();
 
 const removeTrailingSlash = (value = '') => value.replace(/\/+$/, '');
+const sanitizePathSegment = (value = '') => value.toString().replace(/^\/+|\/+$/g, '');
+const normalizePlaybackPath = (value = '') => {
+  if (!value) return '';
+  const withSlash = value.startsWith('/') ? value : `/${value}`;
+  const normalized = withSlash.replace(/\/+/g, '/');
+  return normalized.length > 1 && normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
+};
+const resolveDefaultAppName = () => {
+  const raw = process.env.STREAM_DEFAULT_APP_NAME;
+  if (raw === undefined || raw === null) {
+    return 'live';
+  }
+  return raw.toString().trim();
+};
 
 const shouldOmitPort = (protocol, port) => {
   const numeric = Number(port);
@@ -86,22 +100,32 @@ router.get('/info', authenticate, async (req, res) => {
     const rtspBase = rtspBaseOverride || `${rtspProtocol}://${rtspHost}${rtspPortPart}`;
 
     const streamKey = user.streamKey;
-    const ingestUrl = `${ingestBase}/live`;
-    const ingestFullUrl = `${ingestUrl}/${streamKey}`;
+    const ingestAppName = sanitizePathSegment(resolveDefaultAppName());
+    const ingestUrl = ingestAppName ? `${ingestBase}/${ingestAppName}` : ingestBase;
+    const normalizedIngestUrl = ingestUrl.replace(/([^:]\/)\/+/g, '$1');
+    const ingestFullUrl = `${normalizedIngestUrl}/${streamKey}`.replace(/([^:]\/)\/+/g, '$1');
 
     const rtspPath = rtspService.getLivePlaybackPath(streamKey);
     const rtspUrl = `${rtspBase}${rtspPath}`;
 
     const session = await streamingService.getSessionForUser(user.id);
 
-    const fallbackAppName = 'live';
+    const sessionPath = session?.streamPath;
+    const normalizedSessionPath = sessionPath && sessionPath.toString().trim().length > 0
+      ? normalizePlaybackPath(sessionPath)
+      : null;
+
+    const fallbackAppName = resolveDefaultAppName();
     const activeAppName = (
       session && typeof session.appName === 'string' && session.appName.trim().length > 0
     )
       ? session.appName
       : fallbackAppName;
-    const sanitizedActiveAppName = (activeAppName || '').toString().replace(/^\/+|\/+$/g, '');
-    const playbackStreamPath = `${sanitizedActiveAppName ? `/${sanitizedActiveAppName}` : ''}/${streamKey}`;
+    const sanitizedActiveAppName = sanitizePathSegment(activeAppName);
+    const fallbackStreamPathRaw = `${sanitizedActiveAppName ? `/${sanitizedActiveAppName}` : ''}/${streamKey || ''}`;
+    const fallbackStreamPathNormalized = normalizePlaybackPath(fallbackStreamPathRaw);
+    const fallbackStreamPath = fallbackStreamPathNormalized || (streamKey ? `/${streamKey}` : '/');
+    const playbackStreamPath = normalizedSessionPath || fallbackStreamPath;
     const hlsUrl = `${playbackBase}${playbackStreamPath}/index.m3u8`.replace(/([^:]\/)\/+/g, '$1');
     const flvUrl = `${playbackBase}${playbackStreamPath}.flv`.replace(/([^:]\/)\/+/g, '$1');
 
@@ -117,7 +141,7 @@ router.get('/info', authenticate, async (req, res) => {
         streamKey
       },
       ingest: {
-        baseUrl: ingestUrl,
+        baseUrl: normalizedIngestUrl,
         fullUrl: ingestFullUrl,
         host: ingestHost,
         protocol: ingestProtocol,
