@@ -393,17 +393,15 @@ class StreamingService {
 
       // take latest bytes if available on stored session object
       let publishSession = sessionInfo.session;
-      if (!publishSession || publishSession.inBytes === undefined) {
-        const native = this.getNodeMediaSession(sessionInfo.id || session?.id);
-        if (native) {
-          publishSession = native;
-          sessionInfo.session = native;
+      if (!publishSession) {
+        publishSession = this.getNodeMediaSession(sessionInfo.id || session?.id);
+        if (publishSession) {
+          sessionInfo.session = publishSession;
+          sessionInfo.id = publishSession.id ?? sessionInfo.id;
         }
       }
 
-      if (publishSession && publishSession.inBytes !== undefined) {
-        sessionInfo.bytesStreamed = BigInt(publishSession.inBytes);
-      }
+      sessionInfo.bytesStreamed = this.getSessionInBytes(publishSession);
 
       if (sessionInfo.quotaInterval) {
         clearInterval(sessionInfo.quotaInterval);
@@ -564,7 +562,7 @@ class StreamingService {
       sessionInfo.viewerSessions.set(session.id, {
         id: session.id,
         session,
-        lastOutBytes: BigInt(session.outBytes ?? 0)
+        lastOutBytes: this.getSessionOutBytes(session)
       });
 
       console.log(`[Stream] Viewer connected for ${sessionInfo.user.username}. Active viewers: ${sessionInfo.viewerSessions.size}`);
@@ -608,6 +606,77 @@ class StreamingService {
       console.debug('[Stream] Failed to acquire NodeMedia session:', error?.message || error);
       return null;
     }
+  }
+
+  parseByteValue(value) {
+    if (typeof value === 'bigint') {
+      return value >= 0n ? value : 0n;
+    }
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value) || value <= 0) {
+        return 0n;
+      }
+      return BigInt(Math.floor(value));
+    }
+    if (typeof value === 'string' && value.trim().length > 0) {
+      try {
+        const parsed = BigInt(value.trim());
+        return parsed >= 0n ? parsed : 0n;
+      } catch (error) {
+        return 0n;
+      }
+    }
+    return 0n;
+  }
+
+  getSessionInBytes(session) {
+    if (!session) {
+      return 0n;
+    }
+
+    const candidates = [
+      session.inBytes,
+      session.bytesIn,
+      session?.info?.bytesIn,
+      session?.info?.inBytes,
+      session?.stats?.bytesRead,
+      session?.socket?.bytesRead
+    ];
+
+    let maxValue = 0n;
+    for (const candidate of candidates) {
+      const parsed = this.parseByteValue(candidate);
+      if (parsed > maxValue) {
+        maxValue = parsed;
+      }
+    }
+
+    return maxValue;
+  }
+
+  getSessionOutBytes(session) {
+    if (!session) {
+      return 0n;
+    }
+
+    const candidates = [
+      session.outBytes,
+      session.bytesOut,
+      session?.info?.bytesOut,
+      session?.info?.outBytes,
+      session?.stats?.bytesWritten,
+      session?.socket?.bytesWritten
+    ];
+
+    let maxValue = 0n;
+    for (const candidate of candidates) {
+      const parsed = this.parseByteValue(candidate);
+      if (parsed > maxValue) {
+        maxValue = parsed;
+      }
+    }
+
+    return maxValue;
   }
 
   startQuotaMonitoring(streamKey) {
@@ -658,7 +727,7 @@ class StreamingService {
       return { bytesAdded: 0n, quota: null };
     }
 
-    const newBytes = BigInt(session.inBytes ?? 0);
+    const newBytes = this.getSessionInBytes(session);
     const previous = sessionInfo.bytesStreamed ?? 0n;
     const bytesAdded = newBytes - previous;
 
@@ -736,15 +805,20 @@ class StreamingService {
 
     for (const viewer of targetedViewers) {
       let viewerSession = viewer.session;
-      if (!viewerSession || viewerSession.outBytes === undefined) {
-        const native = this.getNodeMediaSession(viewer.id || viewerSession?.id);
+      if (!viewerSession) {
+        viewerSession = this.getNodeMediaSession(viewer.id);
+        if (viewerSession) {
+          viewer.session = viewerSession;
+        }
+      } else if (viewerSession.outBytes === undefined) {
+        const native = this.getNodeMediaSession(viewerSession.id || viewer.id);
         if (native) {
           viewerSession = native;
           viewer.session = native;
         }
       }
 
-      const currentOut = BigInt(viewerSession?.outBytes ?? viewer.lastOutBytes ?? 0n);
+      const currentOut = this.getSessionOutBytes(viewerSession);
       const previousOut = viewer.lastOutBytes ?? 0n;
       const delta = currentOut - previousOut;
       if (delta > 0n) {
