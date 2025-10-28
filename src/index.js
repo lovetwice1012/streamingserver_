@@ -26,18 +26,32 @@ app.use(express.json());
 const mediaRoot = path.join(__dirname, '../media');
 const liveMediaPath = path.join(mediaRoot, 'live');
 
-// Allow legacy HLS URLs without /live prefix by rewriting them.
+// Allow legacy HLS URL variations by rewriting them.
 app.use((req, res, next) => {
+  if (!req.path) {
+    next();
+    return;
+  }
+
+  // Support /live/<path>/index.m3u8 -> /live/<path>.m3u8
+  const legacyIndexMatch = req.path.match(/^\/live\/(.+)\/index\.m3u8$/);
+  if (legacyIndexMatch) {
+    req.url = `/live/${legacyIndexMatch[1]}.m3u8`;
+    next();
+    return;
+  }
+
+  // Support requests missing the /live prefix but otherwise pointing to manifests/segments.
   if (
-    req.path &&
     !req.path.startsWith('/live/') &&
     (req.path.endsWith('.m3u8') || req.path.endsWith('.ts'))
   ) {
     const segments = req.path.split('/').filter(Boolean);
-    if (segments.length >= 2) {
+    if (segments.length >= 1) {
       req.url = `/live/${segments.join('/')}`;
     }
   }
+
   next();
 });
 

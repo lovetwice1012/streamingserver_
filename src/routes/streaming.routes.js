@@ -184,7 +184,8 @@ router.get('/info', authenticate, async (req, res) => {
     const playbackStreamPath = finalSegments.length > 0
       ? normalizePlaybackPath(`/${finalSegments.join('/')}`)
       : '/';
-    const hlsUrl = `${playbackBase}${playbackStreamPath}/index.m3u8`.replace(/([^:]\/)\/+/g, '$1');
+    const hlsUrl = `${playbackBase}${playbackStreamPath}.m3u8`.replace(/([^:]\/)\/+/g, '$1');
+    const legacyHlsUrl = `${playbackBase}${playbackStreamPath}/index.m3u8`.replace(/([^:]\/)\/+/g, '$1');
     const flvUrl = `${playbackBase}${playbackStreamPath}.flv`.replace(/([^:]\/)\/+/g, '$1');
 
     const quota = await quotaService.getQuotaStatus(user.id);
@@ -207,6 +208,7 @@ router.get('/info', authenticate, async (req, res) => {
       },
       playback: {
         hls: hlsUrl,
+        hlsLegacy: legacyHlsUrl,
         flv: flvUrl,
         rtsp: {
           url: rtspUrl,
