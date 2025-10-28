@@ -26,6 +26,21 @@ app.use(express.json());
 const mediaRoot = path.join(__dirname, '../media');
 const liveMediaPath = path.join(mediaRoot, 'live');
 
+// Allow legacy HLS URLs without /live prefix by rewriting them.
+app.use((req, res, next) => {
+  if (
+    req.path &&
+    !req.path.startsWith('/live/') &&
+    (req.path.endsWith('.m3u8') || req.path.endsWith('.ts'))
+  ) {
+    const segments = req.path.split('/').filter(Boolean);
+    if (segments.length >= 2) {
+      req.url = `/live/${segments.join('/')}`;
+    }
+  }
+  next();
+});
+
 app.use('/live', express.static(liveMediaPath, {
   fallthrough: false,
   setHeaders(res, filePath) {

@@ -406,6 +406,19 @@ server {
         add_header Access-Control-Allow-Origin "*";
     }
 
+    # Backward-compatible HLS URLs without /live prefix
+    location ~ ^/([^/]+)/(.+\\.(m3u8|ts))$ {
+        rewrite ^/([^/]+)/(.+\\.(m3u8|ts))$ /live/\$1/\$2 break;
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+        add_header Access-Control-Allow-Origin "*";
+    }
+
     # React dashboard
     location / {
         root /var/www/streamingserver;
